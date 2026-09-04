@@ -1,0 +1,12 @@
+[project]
+name = "hex-sticker-holder"
+version = "0.1.0"
+description = "Parametric Build123d model for a hexagonal sticker holder"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "build123d>=0.8",
+]
+
+[tool.uv]
+package = false
