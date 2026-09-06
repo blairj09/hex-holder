@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Download, Hexagon, Layers3, LoaderCircle, RotateCcw } from 'lucide-react';
+import { Download, Hexagon, Images, Layers3, LoaderCircle, RotateCcw, Upload, X } from 'lucide-react';
 
 import { LiveModelViewer } from '@/components/live-model-viewer';
 import { Button } from '@/components/ui/button';
@@ -9,12 +9,16 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   buildHolderModel,
   depthForStickerCapacity,
   disposeHolderModel,
+  hasFilledSvgShape,
   INSIDE_WIDTH,
+  isComplexSvgForPrint,
   LID_PLUG_HEIGHT,
+  makeLogoModifierExportModel,
   STICKER_CAPACITIES,
   stickerStackHeight,
   type HolderConfig,
@@ -23,6 +27,8 @@ import {
 } from '@/lib/holder-model';
 
 type AppConfig = Omit<HolderConfig, 'depth'> & { stickerCapacity: StickerCapacity; assembled: boolean };
+type HexStickerLogo = { name: string; url: string };
+type GitHubDirectoryItem = { name: string; type: string; download_url: string | null };
 type ModelContextDocument = Document & {
   modelContext?: {
     registerTool: (
@@ -53,18 +59,60 @@ export default function Home() {
   const [embossed, setEmbossed] = useState(false);
   const [texture, setTexture] = useState(true);
   const [part, setPart] = useState<HolderPart>('both');
+  const [logoSvg, setLogoSvg] = useState<string | null>(null);
+  const [logoScale, setLogoScale] = useState(1);
+  const [logoX, setLogoX] = useState(0);
+  const [logoZ, setLogoZ] = useState(0);
+  const [logoRotation, setLogoRotation] = useState(0);
+  const [logoForegroundOnly, setLogoForegroundOnly] = useState(false);
+  const [logoName, setLogoName] = useState<string | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [catalogLogos, setCatalogLogos] = useState<HexStickerLogo[]>([]);
+  const [catalogState, setCatalogState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [assembled, setAssembled] = useState(false);
   const [resetToken, setResetToken] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState('');
-  const configRef = useRef<AppConfig>({ stickerCapacity, cellWidth, embossed, texture, part, assembled });
+  const configRef = useRef<AppConfig>({ stickerCapacity, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled });
 
   const depth = depthForStickerCapacity(stickerCapacity);
-  const config: HolderConfig = { depth, cellWidth, embossed, texture, part };
+  const config: HolderConfig = { depth, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly };
 
   useEffect(() => {
-    configRef.current = { stickerCapacity, cellWidth, embossed, texture, part, assembled };
-  }, [stickerCapacity, cellWidth, embossed, texture, part, assembled]);
+    configRef.current = { stickerCapacity, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled };
+  }, [stickerCapacity, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled]);
+
+  async function loadCatalog(force = false) {
+    if (!force && (catalogState === 'ready' || catalogState === 'loading')) return;
+    setCatalogState('loading');
+    try {
+      const response = await fetch('https://api.github.com/repos/rstudio/hex-stickers/contents/SVG?ref=main', {
+      headers: { Accept: 'application/vnd.github+json' },
+      });
+      if (!response.ok) throw new Error('The collection could not be loaded.');
+      const items = await response.json() as unknown;
+      if (!Array.isArray(items)) throw new Error('The collection response was not valid.');
+      const logos = items
+        .filter((item): item is GitHubDirectoryItem => Boolean(item) && typeof item === 'object'
+          && typeof (item as GitHubDirectoryItem).name === 'string'
+          && typeof (item as GitHubDirectoryItem).download_url === 'string'
+          && (item as GitHubDirectoryItem).type === 'file'
+          && (item as GitHubDirectoryItem).name.toLowerCase().endsWith('.svg'))
+        .map((item) => ({ name: item.name, url: item.download_url! }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setCatalogLogos(logos);
+      setCatalogState('ready');
+    } catch (error) {
+      console.error(error);
+      setCatalogState('error');
+    }
+  }
+
+  function openCatalog() {
+    setCatalogOpen(true);
+    void loadCatalog();
+  }
 
   useEffect(() => {
     const context = (document as ModelContextDocument).modelContext;
@@ -132,6 +180,75 @@ export default function Home() {
     setStatus('');
   }
 
+  function setLidArtwork(svg: string, name: string, foregroundOnly = false) {
+    if (!/<svg[\s>]/i.test(svg)) {
+      setStatus('That file is not a valid SVG.');
+      return false;
+    }
+    const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    if (parsed.querySelector('parsererror')) {
+      setStatus('That SVG could not be read.');
+      return false;
+    }
+    if (!hasFilledSvgShape(svg)) {
+      setStatus('Use an SVG with at least one filled shape.');
+      return false;
+    }
+    setLogoSvg(svg);
+    setLogoName(name);
+    setLogoScale(1);
+    setLogoX(0);
+    setLogoZ(0);
+    setLogoRotation(0);
+    setLogoForegroundOnly(foregroundOnly);
+    if (part === 'both') setAssembled(true);
+    const detailNotice = foregroundOnly && isComplexSvgForPrint(svg)
+      ? ' Its smallest details were simplified for a reliable 0.2 mm print modifier.'
+      : '';
+    setStatus(foregroundOnly
+      ? `Catalog logo added with its badge background removed.${detailNotice} Use its frame in the assembled preview to position it.`
+      : `Logo added.${detailNotice} Use its frame in the assembled preview to position it.`);
+    return true;
+  }
+
+  function uploadLogo(file: File | undefined) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.svg') || file.size > 500_000) {
+      setStatus('Choose an SVG logo smaller than 500 KB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const svg = typeof reader.result === 'string' ? reader.result : '';
+      setLidArtwork(svg, file.name);
+    };
+    reader.readAsText(file);
+  }
+
+  async function chooseCatalogLogo(logo: HexStickerLogo) {
+    setStatus(`Loading ${logo.name}…`);
+    try {
+      const response = await fetch(logo.url);
+      if (!response.ok) throw new Error('The selected SVG could not be loaded.');
+      const svg = await response.text();
+      if (setLidArtwork(svg, logo.name, true)) setCatalogOpen(false);
+    } catch (error) {
+      console.error(error);
+      setStatus('The selected SVG could not be loaded.');
+    }
+  }
+
+  function removeLogo() {
+    setLogoSvg(null);
+    setLogoName(null);
+    setLogoScale(1);
+    setLogoX(0);
+    setLogoZ(0);
+    setLogoRotation(0);
+    setLogoForegroundOnly(false);
+    setStatus('');
+  }
+
   async function downloadStl() {
     if (isExporting) return;
     setIsExporting(true);
@@ -139,13 +256,17 @@ export default function Home() {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     let model: ReturnType<typeof buildHolderModel> | null = null;
+    let logoModel: ReturnType<typeof buildHolderModel> | null = null;
     try {
-      model = buildHolderModel(config, { arrangement: 'print', preview: false });
+      // STL has no material/part identity. Keep the printable holder and the
+      // color-modifier volume as two aligned files for the slicer to combine.
+      model = buildHolderModel({ ...config, logoSvg: null }, { arrangement: 'print', preview: false });
       // Three.js is Y-up; STL/slicer convention is Z-up.
       model.rotation.x = Math.PI / 2;
       model.updateMatrixWorld(true);
       const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
-      const data = new STLExporter().parse(model, { binary: true });
+      const exporter = new STLExporter();
+      const data = exporter.parse(model, { binary: true });
       const triangleCount = data.getUint32(80, true);
       if (triangleCount === 0 || data.byteLength !== 84 + triangleCount * 50) throw new Error('The exported STL is incomplete.');
 
@@ -158,15 +279,47 @@ export default function Home() {
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus(`Downloaded ${triangleCount.toLocaleString()} triangles · ${(blob.size / 1024).toFixed(0)} KB`);
+
+      let modifierTriangleCount = 0;
+      if (config.logoSvg && part !== 'body') {
+        // Match the selected print layout. In a body + lid export the lid is
+        // deliberately offset from the body, so the modifier must keep that
+        // same world transform for slicers to import it in the right place.
+        logoModel = buildHolderModel({ ...config, part }, { arrangement: 'print', preview: false });
+        const modifierModel = makeLogoModifierExportModel(logoModel);
+        if (!modifierModel) throw new Error('The SVG does not contain a filled shape that can be exported.');
+        modifierModel.rotation.x = Math.PI / 2;
+        modifierModel.updateMatrixWorld(true);
+
+        const modifierData = exporter.parse(modifierModel, { binary: true });
+        modifierTriangleCount = modifierData.getUint32(80, true);
+        if (modifierTriangleCount === 0 || modifierData.byteLength !== 84 + modifierTriangleCount * 50) {
+          throw new Error('The logo modifier STL is incomplete.');
+        }
+        const modifierBlob = new Blob([modifierData.buffer], { type: 'model/stl' });
+        const modifierUrl = URL.createObjectURL(modifierBlob);
+        const modifierLink = document.createElement('a');
+        modifierLink.href = modifierUrl;
+        modifierLink.download = 'hex-sticker-holder-lid-logo-modifier.stl';
+        document.body.appendChild(modifierLink);
+        modifierLink.click();
+        modifierLink.remove();
+        window.setTimeout(() => URL.revokeObjectURL(modifierUrl), 1000);
+      }
+
+      const modifierSummary = modifierTriangleCount ? ` + ${modifierTriangleCount.toLocaleString()} logo modifier triangles` : '';
+      setStatus(`Downloaded ${triangleCount.toLocaleString()} holder triangles${modifierSummary}`);
     } catch (error) {
       console.error(error);
-      setStatus('The STL could not be created. Try a larger honeycomb size.');
+      setStatus(error instanceof Error ? error.message : 'The STL could not be created.');
     } finally {
       if (model) disposeHolderModel(model);
+      if (logoModel) disposeHolderModel(logoModel);
       setIsExporting(false);
     }
   }
+
+  const visibleCatalogLogos = catalogLogos.filter((logo) => logo.name.toLowerCase().includes(catalogQuery.trim().toLowerCase()));
 
   return (
     <main className="min-h-screen bg-[#f1f5f6] text-[#102a33]">
@@ -211,6 +364,28 @@ export default function Home() {
                     options={[['engraved', 'Engraved'], ['raised', 'Raised']]}
                     onChange={(value) => { setEmbossed(value === 'raised'); setStatus(''); }}
                   />
+                </>
+              )}
+            </fieldset>
+
+            <fieldset className="space-y-4 border-t border-[#e2e9eb] pt-4">
+              <legend className="text-xs font-semibold uppercase tracking-[0.12em] text-[#648087]">Lid artwork</legend>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-[#9bb4b9] px-3 text-sm font-medium text-[#315964] transition hover:border-[#0c697a] hover:bg-[#f2fbfa]">
+                  <Upload className="size-4" /> {logoSvg ? 'Replace SVG' : 'Upload SVG'}
+                  <input type="file" accept=".svg,image/svg+xml" className="sr-only" onChange={(event) => uploadLogo(event.currentTarget.files?.[0])} />
+                </label>
+                <button type="button" onClick={openCatalog} className="flex h-10 items-center justify-center gap-2 rounded-lg border border-[#9bb4b9] px-3 text-sm font-medium text-[#315964] transition hover:border-[#0c697a] hover:bg-[#f2fbfa]">
+                  <Images className="size-4" /> Browse logos
+                </button>
+              </div>
+              {logoSvg && (
+                <>
+                  <div className="flex items-center justify-between rounded-lg bg-[#f1f6f5] px-3 py-2 text-sm font-medium text-[#315964]">
+                    <span className="truncate pr-2">{logoName ?? 'SVG logo'}</span>
+                    <button type="button" onClick={removeLogo} className="grid size-7 place-items-center rounded-md text-[#52717a] transition hover:bg-white hover:text-[#102a33]" aria-label="Remove SVG logo"><X className="size-4" /></button>
+                  </div>
+                  <p className="text-xs leading-5 text-[#52717a]">Select the artwork in the assembled preview to reveal its frame. Drag inside to move, use corners to scale, the round handle to rotate, and Delete or Backspace to remove it.</p>
                 </>
               )}
             </fieldset>
@@ -260,15 +435,60 @@ export default function Home() {
           </div>
 
           <div className="h-[500px] min-h-0 md:h-auto md:flex-1">
-            <LiveModelViewer {...config} assembled={assembled} resetToken={resetToken} />
+            <LiveModelViewer
+              {...config}
+              assembled={assembled}
+              resetToken={resetToken}
+              onLogoTransformChange={({ x, z, scale, rotation }) => {
+                setLogoX(x);
+                setLogoZ(z);
+                setLogoScale(scale);
+                setLogoRotation(rotation);
+                setStatus('');
+              }}
+              onLogoRemove={() => {
+                removeLogo();
+                setStatus('Logo removed.');
+              }}
+            />
           </div>
         </section>
       </section>
+      <Dialog open={catalogOpen} onOpenChange={setCatalogOpen}>
+        <DialogContent className="h-[min(700px,calc(100vh-2rem))] min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] max-w-[calc(100%-2rem)] gap-3 overflow-hidden p-5 sm:max-w-3xl" aria-describedby="hex-logo-catalog-description">
+          <DialogHeader className="pr-8">
+            <DialogTitle>Browse hex logos</DialogTitle>
+            <DialogDescription id="hex-logo-catalog-description">Select a logo from the rstudio/hex-stickers collection.</DialogDescription>
+          </DialogHeader>
+          <Input value={catalogQuery} onChange={(event) => setCatalogQuery(event.currentTarget.value)} placeholder="Search logos" aria-label="Search hex logo collection" className="border-[#b9ced3]" />
+          <div className="min-h-0 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+            {catalogState === 'loading' || catalogState === 'idle' ? (
+              <div className="grid min-h-48 place-items-center text-sm text-[#52717a]"><LoaderCircle className="size-5 animate-spin" /></div>
+            ) : catalogState === 'error' ? (
+              <div className="grid min-h-48 place-items-center gap-3 text-center text-sm text-[#52717a]">
+                <span>The collection could not be loaded.</span>
+                <button type="button" onClick={() => void loadCatalog(true)} className="rounded-md border border-[#9bb4b9] px-3 py-1.5 font-medium text-[#315964]">Try again</button>
+              </div>
+            ) : visibleCatalogLogos.length ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {visibleCatalogLogos.map((logo) => (
+                  <button key={logo.name} type="button" onClick={() => void chooseCatalogLogo(logo)} className="group overflow-hidden rounded-lg border border-[#d7e1e3] bg-white text-left transition hover:border-[#0c697a] hover:bg-[#f2fbfa] focus-visible:ring-3 focus-visible:ring-[#0c697a]/30">
+                    <span className="grid aspect-square place-items-center bg-[#f4f7f7] p-2">{/* oxlint-disable-next-line next/no-img-element -- remote public SVG thumbnails must keep their original view boxes. */}<img src={logo.url} alt="" loading="lazy" decoding="async" className="size-full object-contain" /></span>
+                    <span className="block truncate px-2 py-1.5 text-xs font-medium text-[#315964]">{logo.name.replace(/\.svg$/i, '')}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="grid min-h-48 place-items-center text-sm text-[#52717a]">No matching logos.</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
 
-function DimensionControl({ label, detail, value, min, max, step, onChange, disabled = false }: { label: string; detail?: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void; disabled?: boolean }) {
+function DimensionControl({ label, detail, value, min, max, step, unit = 'mm', onChange, disabled = false }: { label: string; detail?: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (value: number) => void; disabled?: boolean }) {
   const id = label.toLowerCase().replaceAll(' ', '-');
 
   return (
@@ -277,7 +497,7 @@ function DimensionControl({ label, detail, value, min, max, step, onChange, disa
         <div><Label htmlFor={id} className="text-sm font-semibold">{label}</Label>{detail && <p className="mt-0.5 text-xs text-[#52717a]">{detail}</p>}</div>
         <div className="relative w-28">
           <Input id={id} type="number" inputMode="decimal" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => { const next = event.currentTarget.valueAsNumber; if (Number.isFinite(next)) onChange(clamp(next, min, max)); }} onBlur={(event) => { event.currentTarget.value = String(value); }} className="h-9 border-[#b9ced3] bg-white pr-9 text-right font-mono text-sm" />
-          <span className="pointer-events-none absolute right-3 top-2.5 text-xs text-[#52717a]">mm</span>
+          <span className="pointer-events-none absolute right-3 top-2.5 text-xs text-[#52717a]">{unit}</span>
         </div>
       </div>
       <Slider value={[value]} min={min} max={max} step={step} disabled={disabled} onValueChange={(values) => { const next = typeof values === 'number' ? values : values[0]; if (Number.isFinite(next)) onChange(next); }} className="[&_[data-slot=slider-range]]:bg-[#0c697a] [&_[data-slot=slider-thumb]]:border-[#0c697a]" />

@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export type HolderPart = 'body' | 'lid' | 'both';
 export type HolderArrangement = 'print' | 'assembled';
@@ -8,6 +10,9 @@ export type StickerCapacity = (typeof STICKER_CAPACITIES)[number];
 export const LID_HEIGHT = 6;
 export const LID_FLANGE_HEIGHT = 1.6;
 export const LID_PLUG_HEIGHT = LID_HEIGHT - LID_FLANGE_HEIGHT;
+/** A small 45° relief at the faces printed against the build plate. */
+export const BUILD_PLATE_CHAMFER = 0.6;
+export const LOGO_LAYER_HEIGHT = 0.2;
 const LID_TIP_CHAMFER = LID_PLUG_HEIGHT * 0.1;
 
 export type HolderConfig = {
@@ -16,6 +21,12 @@ export type HolderConfig = {
   embossed: boolean;
   texture: boolean;
   part: HolderPart;
+  logoSvg?: string | null;
+  logoScale?: number;
+  logoX?: number;
+  logoZ?: number;
+  logoRotation?: number;
+  logoForegroundOnly?: boolean;
 };
 
 export const INSIDE_WIDTH = 46;
@@ -24,6 +35,24 @@ export const OUTER_WIDTH = INSIDE_WIDTH + 2 * WALL;
 const OUTER_RADIUS = OUTER_WIDTH / Math.sqrt(3);
 const OUTER_APOTHEM = OUTER_WIDTH / 2;
 const EPSILON = 0.02;
+const LOGO_BASE_WIDTH = 20;
+const LOGO_CURVE_SEGMENTS = 24;
+// Most logos are modest in size and need enough headroom for their lettering,
+// outlines, and small accents to survive. A separate, tighter budget protects
+// the preview from illustration-grade SVGs with thousands of paths.
+const MAX_LOGO_SHAPES = 420;
+const MAX_LOGO_CURVES = 24_000;
+const MAX_SHAPE_CURVES = 640;
+const COMPLEX_SVG_SOURCE_LENGTH = 250_000;
+const COMPLEX_MAX_LOGO_SHAPES = 120;
+const COMPLEX_MAX_LOGO_CURVES = 5_000;
+const COMPLEX_MAX_SHAPE_CURVES = 320;
+const COMPLEX_LOGO_CURVE_SEGMENTS = 6;
+export const LOGO_POSITION_LIMIT = OUTER_WIDTH * 0.24;
+
+export function isComplexSvgForPrint(svg: string) {
+  return svg.length > COMPLEX_SVG_SOURCE_LENGTH;
+}
 
 type Point = THREE.Vector3;
 type LoftLayer = { y: number; flatToFlat: number };
@@ -139,7 +168,8 @@ function createBodyCoreGeometry(depth: number, engraved: boolean) {
   const textureDepth = WALL * (0.5 / 1.5);
   const shellWidth = engraved ? OUTER_WIDTH - 2 * textureDepth : OUTER_WIDTH;
   const outerLayers = uniqueLayers([
-    { y: 0, flatToFlat: OUTER_WIDTH },
+    { y: 0, flatToFlat: OUTER_WIDTH - BUILD_PLATE_CHAMFER * 2 },
+    { y: BUILD_PLATE_CHAMFER, flatToFlat: OUTER_WIDTH },
     { y: floor, flatToFlat: OUTER_WIDTH },
     { y: Math.min(bodyHeight, floor + EPSILON), flatToFlat: shellWidth },
     { y: bodyHeight, flatToFlat: shellWidth },
@@ -281,8 +311,11 @@ function createTextureGeometry(depth: number, cellWidth: number, embossed: boole
   }
 
   const face = new THREE.Shape();
-  face.moveTo(-OUTER_RADIUS / 2, 0);
-  face.lineTo(OUTER_RADIUS / 2, 0);
+  // The engraved face is a separate, recessed skin. Let the unified core own
+  // the first 0.6 mm above the build plate; otherwise this rectangular skin
+  // reaches the bed at the full outer width and hides the body's chamfer.
+  face.moveTo(-OUTER_RADIUS / 2, BUILD_PLATE_CHAMFER);
+  face.lineTo(OUTER_RADIUS / 2, BUILD_PLATE_CHAMFER);
   face.lineTo(OUTER_RADIUS / 2, bodyHeight);
   face.lineTo(-OUTER_RADIUS / 2, bodyHeight);
   face.closePath();
@@ -329,7 +362,7 @@ function standardMaterial(color: string) {
 function addEdges(mesh: THREE.Mesh, opacity = 0.18) {
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(mesh.geometry, 24),
-    new THREE.LineBasicMaterial({ color: '#e8fff7', transparent: true, opacity }),
+    new THREE.LineBasicMaterial({ color: '#d8e1de', transparent: true, opacity }),
   );
   mesh.add(edges);
 }
@@ -338,7 +371,7 @@ function makeBody(config: HolderConfig, preview: boolean) {
   const group = new THREE.Group();
   group.name = 'holder-body';
   const engraved = config.texture && !config.embossed;
-  const core = new THREE.Mesh(createBodyCoreGeometry(config.depth, engraved), standardMaterial('#9fd5b9'));
+  const core = new THREE.Mesh(createBodyCoreGeometry(config.depth, engraved), standardMaterial('#f3f6f4'));
   core.name = 'body-core';
   core.castShadow = true;
   core.receiveShadow = true;
@@ -349,7 +382,7 @@ function makeBody(config: HolderConfig, preview: boolean) {
     for (let side = 0; side < 6; side += 1) {
       const feature = new THREE.Mesh(
         createTextureGeometry(config.depth, config.cellWidth, config.embossed, side),
-        standardMaterial(config.embossed ? '#d6f2ca' : '#b9e8cd'),
+        standardMaterial(config.embossed ? '#ffffff' : '#e7eeea'),
       );
       feature.name = config.embossed ? 'raised-honeycomb' : 'engraved-honeycomb-ridges';
       feature.castShadow = true;
@@ -359,7 +392,7 @@ function makeBody(config: HolderConfig, preview: boolean) {
         const outlines = new THREE.LineSegments(
           createTextureOutlineGeometry(config.depth, config.cellWidth, config.embossed, side),
           new THREE.LineBasicMaterial({
-            color: config.embossed ? '#4b8d7a' : '#397c70',
+            color: config.embossed ? '#7e9189' : '#657d73',
             transparent: true,
             opacity: config.embossed ? 0.68 : 0.82,
           }),
@@ -373,7 +406,295 @@ function makeBody(config: HolderConfig, preview: boolean) {
   return group;
 }
 
-function makeLid(preview: boolean) {
+type SvgShape = { shape: THREE.Shape; bounds: THREE.Box2; fill: string };
+
+function shapeCurveCount(shape: THREE.Shape) {
+  return shape.curves.length + shape.holes.reduce((count, hole) => count + hole.curves.length, 0);
+}
+
+function shapeBounds(shape: THREE.Shape) {
+  const points = [...shape.getPoints(12), ...shape.holes.flatMap((hole) => hole.getPoints(12))];
+  return new THREE.Box2().setFromPoints(points);
+}
+
+function rgbForFill(fill: string) {
+  const match = fill.trim().match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+  if (!match) return null;
+  const hex = match[1].length === 3
+    ? `${match[1][0].repeat(2)}${match[1][1].repeat(2)}${match[1][2].repeat(2)}`
+    : match[1];
+  return [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+}
+
+function isNeutralFill(fill: string) {
+  const rgb = rgbForFill(fill);
+  if (!rgb) return false;
+  return Math.max(...rgb) - Math.min(...rgb) <= 0.06;
+}
+
+function isColorfulFill(fill: string) {
+  const rgb = rgbForFill(fill);
+  if (!rgb) return false;
+  return Math.max(...rgb) - Math.min(...rgb) >= 0.16;
+}
+
+function svgClassFills(svg: string) {
+  const fills = new Map<string, string>();
+  for (const styleBlock of svg.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) {
+    for (const rule of styleBlock[1].matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const fill = rule[2].match(/(?:^|;)\s*fill\s*:\s*([^;]+)/i)?.[1]?.trim();
+      if (!fill) continue;
+      for (const selector of rule[1].matchAll(/\.([\w-]+)/g)) fills.set(selector[1], fill);
+    }
+  }
+  return fills;
+}
+
+function simplifiedLoop(path: THREE.CurvePath<THREE.Vector2>, segments: number) {
+  const points = path.getSpacedPoints(Math.max(3, segments));
+  if (points.length > 1 && points[0].distanceToSquared(points.at(-1)!) < EPSILON * EPSILON) points.pop();
+  return points;
+}
+
+function addPolygonToPath(path: THREE.Path, points: THREE.Vector2[]) {
+  if (points.length < 3) return false;
+  path.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) path.lineTo(point.x, point.y);
+  path.closePath();
+  return true;
+}
+
+function simplifyShapeForPrint(shape: THREE.Shape, maxCurves: number) {
+  const loops = [shape, ...shape.holes];
+  const totalLength = loops.reduce((length, loop) => length + loop.getLength(), 0);
+  if (!Number.isFinite(totalLength) || totalLength <= EPSILON) return null;
+
+  const pointBudget = Math.max(12, maxCurves - loops.length);
+  const outerPoints = simplifiedLoop(shape, Math.max(3, Math.round(pointBudget * shape.getLength() / totalLength)));
+  const simplified = new THREE.Shape();
+  if (!addPolygonToPath(simplified, outerPoints)) return null;
+
+  for (const hole of shape.holes) {
+    const points = simplifiedLoop(hole, Math.max(3, Math.round(pointBudget * hole.getLength() / totalLength)));
+    const simplifiedHole = new THREE.Path();
+    if (addPolygonToPath(simplifiedHole, points)) simplified.holes.push(simplifiedHole);
+  }
+  return simplified;
+}
+
+function capPrintableShapes(shapes: SvgShape[], sourceLength: number) {
+  const isComplex = sourceLength > COMPLEX_SVG_SOURCE_LENGTH;
+  const maxShapes = isComplex ? COMPLEX_MAX_LOGO_SHAPES : MAX_LOGO_SHAPES;
+  const maxCurves = isComplex ? COMPLEX_MAX_LOGO_CURVES : MAX_LOGO_CURVES;
+  const maxShapeCurves = isComplex ? COMPLEX_MAX_SHAPE_CURVES : MAX_SHAPE_CURVES;
+  const eligible = shapes.flatMap((item) => {
+    if (shapeCurveCount(item.shape) <= maxShapeCurves) return [item];
+    const simplified = simplifyShapeForPrint(item.shape, maxShapeCurves);
+    return simplified ? [{ ...item, shape: simplified }] : [];
+  });
+  const totalCurves = eligible.reduce((count, { shape }) => count + shapeCurveCount(shape), 0);
+  if (eligible.length <= maxShapes && totalCurves <= maxCurves) return eligible;
+
+  const ranked = [...eligible].sort((a, b) => (
+    b.bounds.getSize(new THREE.Vector2()).lengthSq() - a.bounds.getSize(new THREE.Vector2()).lengthSq()
+  ));
+  const capped: SvgShape[] = [];
+  let curveCount = 0;
+  for (const item of ranked) {
+    const nextCurveCount = curveCount + shapeCurveCount(item.shape);
+    if (capped.length >= maxShapes || nextCurveCount > maxCurves) continue;
+    capped.push(item);
+    curveCount = nextCurveCount;
+  }
+  return capped;
+}
+
+function svgShapes(svg: string, simplifyCatalogArtwork = false, scale = 1) {
+  const shapes: SvgShape[] = [];
+  const classFills = svgClassFills(svg);
+  for (const path of new SVGLoader().parse(svg).paths) {
+    const classNames = path.userData?.node?.getAttribute('class')?.split(/\s+/) ?? [];
+    let classFill: string | undefined;
+    for (const className of classNames) {
+      const candidate = classFills.get(className);
+      if (candidate) classFill = candidate;
+    }
+    const fill = classFill ?? (typeof path.userData?.style?.fill === 'string' ? path.userData.style.fill : '');
+    if (fill.trim().toLowerCase() === 'none') continue;
+    for (const shape of SVGLoader.createShapes(path)) {
+      const bounds = shapeBounds(shape);
+      if (!bounds.isEmpty()) shapes.push({ shape, bounds, fill });
+    }
+  }
+  // Uploaded SVGs are faithful single-color conversions: retain every filled
+  // contour exactly as supplied. Catalog art is curated differently below to
+  // remove its badge background and bound illustration-grade SVGs.
+  if (!simplifyCatalogArtwork || !shapes.length) return shapes.map(({ shape }) => shape);
+
+  const overall = shapes.reduce((bounds, item) => bounds.union(item.bounds), new THREE.Box2());
+  const overallSize = overall.getSize(new THREE.Vector2());
+  const overallArea = overallSize.x * overallSize.y;
+  if (!Number.isFinite(overallArea) || overallArea <= EPSILON) return shapes.map(({ shape }) => shape);
+
+  // Catalog badges tend to begin with a large colored hexagon (and sometimes
+  // a gradient gloss). Those shapes read as a solid black lid when converted
+  // to one color. Keep large flat foreground art, but omit only true badges
+  // and broad paint-server fills.
+  const foreground = shapes.filter(({ bounds, fill }) => {
+    const size = bounds.getSize(new THREE.Vector2());
+    const coverage = size.x * size.y / overallArea;
+    const coversBadge = (
+      coverage > 0.25
+      && size.x / overallSize.x > 0.78
+      && size.y / overallSize.y > 0.78
+    );
+    const broadGradient = /url\(/i.test(fill) && coverage > 0.15;
+    return !coversBadge && !broadGradient;
+  });
+  const candidates = foreground.length ? foreground : shapes;
+
+  // Some catalog stickers (including dplyr and ggplot2) build their badge
+  // background from many separate neutral paths. A per-shape bounds check
+  // cannot identify that collective backdrop. When a sticker uses a rich color
+  // palette, a repeated neutral fill is overwhelmingly likely to be its
+  // backdrop rather than the art we want for a one-color lid modifier.
+  const fillGroups = new Map<string, { count: number }>();
+  for (const { fill } of candidates) {
+    const group = fillGroups.get(fill) ?? { count: 0 };
+    group.count += 1;
+    fillGroups.set(fill, group);
+  }
+  const richPalette = [...fillGroups.keys()].filter(isColorfulFill).length >= 4;
+  const backgroundFills = new Set(
+    [...fillGroups].flatMap(([fill, group]) => (
+      richPalette && isNeutralFill(fill) && group.count >= 5 ? [fill] : []
+    )),
+  );
+  const artwork = candidates.filter(({ fill }) => !backgroundFills.has(fill));
+  const printableCandidates = artwork.length ? artwork : candidates;
+
+  // Keep the fine lettering, outlines, and thin accents of ordinary SVGs.
+  // Only simplify dense illustrations, where their details would become a
+  // muddy solid on a 20 mm one-color modifier anyway.
+  const isComplex = isComplexSvgForPrint(svg);
+  const filterFineDetails = isComplex || printableCandidates.length > MAX_LOGO_SHAPES;
+  const printable = filterFineDetails
+    ? printableCandidates.filter(({ bounds }) => {
+      const size = bounds.getSize(new THREE.Vector2());
+      const widthMm = size.x / overallSize.x * LOGO_BASE_WIDTH * scale;
+      const heightMm = size.y / overallSize.y * LOGO_BASE_WIDTH * scale;
+      const longSideMm = Math.max(widthMm, heightMm);
+      const shortSideMm = Math.min(widthMm, heightMm);
+      return isComplex
+        ? longSideMm >= 0.25 && shortSideMm >= 0.12
+        : longSideMm >= 0.18 && shortSideMm >= 0.06;
+    })
+    : printableCandidates;
+  const selected = printable.length ? printable : printableCandidates;
+  // A handful of catalog illustrations contain thousands of paths. The largest
+  // printable features carry the recognizable design; capping them prevents an
+  // impractically dense STL or a browser freeze.
+  const bounded = capPrintableShapes(selected, svg.length);
+  return bounded.map(({ shape }) => shape);
+}
+
+export function hasFilledSvgShape(svg: string) {
+  // This is deliberately a fast, non-rendering preflight. Parsing a complex
+  // catalog SVG here would duplicate the work done by the model builder and
+  // make a click appear to hang before the preview gets a chance to update.
+  return /<(?:path|polygon|polyline|rect|circle|ellipse)\b/i.test(svg);
+}
+
+function extrudeLogoShapes(shapes: THREE.Shape[], curveSegments: number) {
+  const options = {
+    depth: LOGO_LAYER_HEIGHT,
+    bevelEnabled: false,
+    curveSegments,
+  };
+  const extrudeSafely = (subset: THREE.Shape[]): THREE.BufferGeometry[] => {
+    try {
+      return [new THREE.ExtrudeGeometry(subset, options)];
+    } catch {
+      if (subset.length === 1) return [];
+      const middle = Math.ceil(subset.length / 2);
+      return [...extrudeSafely(subset.slice(0, middle)), ...extrudeSafely(subset.slice(middle))];
+    }
+  };
+
+  const fragments = extrudeSafely(shapes);
+  if (!fragments.length) return null;
+  if (fragments.length === 1) return fragments[0];
+  const merged = mergeGeometries(fragments, false);
+  for (const fragment of fragments) fragment.dispose();
+  return merged;
+}
+
+function makeLidLogo(config: HolderConfig) {
+  if (!config.logoSvg) return null;
+  let shapes: THREE.Shape[];
+  try {
+    shapes = svgShapes(config.logoSvg, config.logoForegroundOnly, config.logoScale ?? 1);
+  } catch {
+    return null;
+  }
+  if (!shapes.length) return null;
+
+  let geometry: THREE.BufferGeometry | null;
+  try {
+    const curveSegments = isComplexSvgForPrint(config.logoSvg)
+      ? COMPLEX_LOGO_CURVE_SEGMENTS
+      : LOGO_CURVE_SEGMENTS;
+    geometry = extrudeLogoShapes(shapes, curveSegments);
+  } catch {
+    return null;
+  }
+  if (!geometry) return null;
+  // Standard artwork uses 24 segments per curve for smooth lettering. Very
+  // large illustrations use a lower-detail, print-safe fallback instead.
+  // SVG fills are extruded into the lid so the 0.2 mm modifier is flush with
+  // the outer surface rather than forming a raised badge.
+  geometry.rotateX(-Math.PI / 2);
+  geometry.computeBoundingBox();
+  const initialBox = geometry.boundingBox!;
+  const initialSize = initialBox.getSize(new THREE.Vector3());
+  const longestSide = Math.max(initialSize.x, initialSize.z);
+  if (!Number.isFinite(longestSide) || longestSide <= EPSILON) {
+    geometry.dispose();
+    return null;
+  }
+  geometry.scale(LOGO_BASE_WIDTH / longestSide, 1, LOGO_BASE_WIDTH / longestSide);
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox!;
+  const center = box.getCenter(new THREE.Vector3());
+  geometry.translate(-center.x, -box.min.y, -center.z);
+  geometry.computeVertexNormals();
+
+  const group = new THREE.Group();
+  group.name = 'lid-svg-logo';
+  group.position.set(
+    THREE.MathUtils.clamp(config.logoX ?? 0, -LOGO_POSITION_LIMIT, LOGO_POSITION_LIMIT),
+    0,
+    THREE.MathUtils.clamp(config.logoZ ?? 0, -LOGO_POSITION_LIMIT, LOGO_POSITION_LIMIT),
+  );
+  group.scale.setScalar(config.logoScale ?? 1);
+  group.rotation.y = config.logoRotation ?? 0;
+
+  const logo = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+    color: '#000000',
+    metalness: 0,
+    roughness: 0.42,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  }));
+  logo.name = 'lid-svg-modifier';
+  logo.castShadow = true;
+  group.add(logo);
+  return group;
+}
+
+function makeLid(config: HolderConfig, preview: boolean) {
   const group = new THREE.Group();
   group.name = 'holder-lid';
   const flangeHeight = LID_FLANGE_HEIGHT;
@@ -386,10 +707,11 @@ function makeLid(preview: boolean) {
   const bead = WALL * (0.3 / 1.5);
   const beadCenter = 0.55 * straightHeight;
   const beadHalf = plugHeight * (1.4 / 6) / 2;
-  const material = standardMaterial('#b8dfc8');
+  const material = standardMaterial('#f7f8f7');
 
   const flange = new THREE.Mesh(createHexLoftGeometry([
-    { y: 0, flatToFlat: OUTER_WIDTH },
+    { y: 0, flatToFlat: OUTER_WIDTH - BUILD_PLATE_CHAMFER * 2 },
+    { y: BUILD_PLATE_CHAMFER, flatToFlat: OUTER_WIDTH },
     { y: flangeHeight, flatToFlat: OUTER_WIDTH },
   ]), material);
   flange.name = 'lid-flange';
@@ -411,6 +733,8 @@ function makeLid(preview: boolean) {
   plug.castShadow = true;
   if (preview) addEdges(plug, 0.16);
   group.add(plug);
+  const logo = makeLidLogo(config);
+  if (logo) group.add(logo);
   return group;
 }
 
@@ -429,13 +753,33 @@ export function buildHolderModel(
   }
 
   if (config.part !== 'body') {
-    const lid = makeLid(preview);
+    const lid = makeLid(config, preview);
     model.add(lid);
   }
 
   applyHolderArrangement(model, config.depth, arrangement);
   model.updateMatrixWorld(true);
   return model;
+}
+
+/**
+ * Makes a standalone logo mesh with the exact world transform it has in the
+ * printable holder layout. STL cannot retain scene hierarchy, so preserving
+ * this transform is what keeps a separately imported modifier aligned.
+ */
+export function makeLogoModifierExportModel(model: THREE.Object3D) {
+  const source = model.getObjectByName('lid-svg-modifier');
+  if (!(source instanceof THREE.Mesh)) return null;
+
+  source.updateWorldMatrix(true, false);
+  const modifier = source.clone();
+  modifier.matrixAutoUpdate = false;
+  modifier.matrix.copy(source.matrixWorld);
+  modifier.matrix.decompose(modifier.position, modifier.quaternion, modifier.scale);
+
+  const modifierModel = new THREE.Group();
+  modifierModel.add(modifier);
+  return modifierModel;
 }
 
 export function applyHolderArrangement(model: THREE.Object3D, depth: number, arrangement: HolderArrangement) {

@@ -1,12 +1,16 @@
-import { Box3, Vector3 } from 'three';
+import { Box3, BoxGeometry, Group, Matrix4, Mesh, MeshBasicMaterial, Vector3 } from 'three';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 
 import {
+  BUILD_PLATE_CHAMFER,
   buildHolderModel,
   depthForStickerCapacity,
   disposeHolderModel,
   LID_HEIGHT,
   LID_PLUG_HEIGHT,
+  LOGO_LAYER_HEIGHT,
+  makeLogoModifierExportModel,
+  OUTER_WIDTH,
   stickerStackHeight,
 } from '../lib/holder-model.ts';
 
@@ -57,6 +61,21 @@ function validateGeometry(name, geometry) {
   if (openEdges) throw new Error(`${name} is not watertight (${openEdges} unmatched edges).`);
   if (signedVolume <= 0.001) throw new Error(`${name} has inverted or degenerate face winding.`);
   if (checked !== geometry) checked.dispose();
+}
+
+function flatToFlatAtY(mesh, y) {
+  const position = mesh.geometry.getAttribute('position');
+  let minimum = Infinity;
+  let maximum = -Infinity;
+  for (let index = 0; index < position.count; index += 1) {
+    if (Math.abs(position.getY(index) - y) > 0.0001) continue;
+    minimum = Math.min(minimum, position.getX(index));
+    maximum = Math.max(maximum, position.getX(index));
+  }
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+    throw new Error(`${mesh.name} has no perimeter at y=${y}.`);
+  }
+  return maximum - minimum;
 }
 
 for (const testCase of cases) {
@@ -114,6 +133,111 @@ for (const capacity of [25, 50, 75, 100]) {
 }
 
 console.log('6 mm fixed lid dimensions and sticker-space allowance verified');
+
+const chamferModel = buildHolderModel({
+  depth: depthForStickerCapacity(25),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: false,
+  part: 'both',
+}, { arrangement: 'print', preview: false });
+const chamferedBody = chamferModel.getObjectByName('body-core');
+const chamferedLid = chamferModel.getObjectByName('lid-flange');
+if (!(chamferedBody instanceof Mesh) || !(chamferedLid instanceof Mesh)) {
+  throw new Error('Build-plate chamfer is missing a holder or lid perimeter.');
+}
+const bedWidth = OUTER_WIDTH - BUILD_PLATE_CHAMFER * 2;
+for (const mesh of [chamferedBody, chamferedLid]) {
+  if (Math.abs(flatToFlatAtY(mesh, 0) - bedWidth) > 0.0001) {
+    throw new Error(`${mesh.name} does not inset the build-plate edge by ${BUILD_PLATE_CHAMFER} mm.`);
+  }
+  if (Math.abs(flatToFlatAtY(mesh, BUILD_PLATE_CHAMFER) - OUTER_WIDTH) > 0.0001) {
+    throw new Error(`${mesh.name} does not return to the specified outer width above the chamfer.`);
+  }
+}
+disposeHolderModel(chamferModel);
+
+const texturedChamferModel = buildHolderModel({
+  depth: depthForStickerCapacity(25),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: true,
+  part: 'body',
+}, { arrangement: 'print', preview: false });
+let lowestEngravedSkin = Infinity;
+texturedChamferModel.traverse((object) => {
+  if (!(object instanceof Mesh) || object.name !== 'engraved-honeycomb-ridges') return;
+  const positions = object.geometry.getAttribute('position');
+  for (let index = 0; index < positions.count; index += 1) lowestEngravedSkin = Math.min(lowestEngravedSkin, positions.getY(index));
+});
+if (Math.abs(lowestEngravedSkin - BUILD_PLATE_CHAMFER) > 0.0001) {
+  throw new Error('The engraved honeycomb skin obscures the body build-plate chamfer.');
+}
+disposeHolderModel(texturedChamferModel);
+console.log('0.6 mm build-plate chamfers verified');
+
+const transformedLogoModel = buildHolderModel({
+  depth: depthForStickerCapacity(50),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: false,
+  part: 'both',
+});
+const transformedLid = transformedLogoModel.getObjectByName('holder-lid');
+if (!transformedLid) throw new Error('Logo transform test is missing the lid.');
+const logoTransform = new Group();
+logoTransform.name = 'lid-svg-logo';
+logoTransform.position.set(4.5, 0, -3.25);
+logoTransform.scale.setScalar(1.7);
+logoTransform.rotation.y = 0.42;
+const sourceLogo = new Mesh(new BoxGeometry(2, LOGO_LAYER_HEIGHT, 1), new MeshBasicMaterial());
+sourceLogo.name = 'lid-svg-modifier';
+logoTransform.add(sourceLogo);
+transformedLid.add(logoTransform);
+transformedLogoModel.updateMatrixWorld(true);
+const exportedLogoModel = makeLogoModifierExportModel(transformedLogoModel);
+const exportedLogo = exportedLogoModel?.getObjectByName('lid-svg-modifier');
+if (!(sourceLogo instanceof Mesh) || !(exportedLogo instanceof Mesh)) {
+  throw new Error('SVG logo modifier export model was not created.');
+}
+sourceLogo.updateWorldMatrix(true, false);
+exportedLogoModel.rotation.x = Math.PI / 2;
+exportedLogoModel.updateMatrixWorld(true);
+const expectedLogoMatrix = new Matrix4().makeRotationX(Math.PI / 2).multiply(sourceLogo.matrixWorld);
+for (let index = 0; index < 16; index += 1) {
+  if (Math.abs(exportedLogo.matrixWorld.elements[index] - expectedLogoMatrix.elements[index]) > 0.0001) {
+    throw new Error('SVG modifier export does not preserve preview position, scale, and rotation.');
+  }
+}
+disposeHolderModel(transformedLogoModel);
+console.log('SVG modifier export transform verified');
+
+if (typeof DOMParser === 'undefined') {
+  console.log('SVG logo modifier test requires a browser DOM and is covered in preview QA');
+} else {
+  const logoModel = buildHolderModel({
+    depth: depthForStickerCapacity(50),
+    cellWidth: 3.9,
+    embossed: false,
+    texture: true,
+    part: 'lid',
+    logoSvg: '<svg viewBox="0 0 20 20"><path fill="#000" d="M2 2h16v16H2z"/></svg>',
+    logoScale: 1,
+    logoX: 0,
+    logoZ: 0,
+  });
+  const logoModifier = logoModel.getObjectByName('lid-svg-modifier');
+  if (!(logoModifier instanceof Mesh)) throw new Error('SVG logo modifier was not added to the lid.');
+  logoModifier.geometry.computeBoundingBox();
+  const logoBox = logoModifier.geometry.boundingBox;
+  if (!logoBox) throw new Error('SVG logo modifier has no bounds.');
+  const logoLayerHeight = logoBox.getSize(new Vector3()).y;
+  if (Math.abs(logoLayerHeight - LOGO_LAYER_HEIGHT) > 0.0001) {
+    throw new Error(`SVG logo layer is ${logoLayerHeight} mm instead of ${LOGO_LAYER_HEIGHT} mm.`);
+  }
+  disposeHolderModel(logoModel);
+  console.log('SVG logo modifier layer verified');
+}
 
 const assembledModel = buildHolderModel({
   depth: depthForStickerCapacity(50),

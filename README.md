@@ -44,6 +44,15 @@ sticker increments, using 0.25 mm of stack space per sticker. The complete lid
 stays 6 mm tall at every capacity: a 1.6 mm flange plus a 4.4 mm plug. The body
 adds that fixed 4.4 mm intrusion above the selected sticker space.
 
+An uploaded SVG previews in black on the white lid. Downloads include the
+printable holder STL and, when artwork is present, an aligned 0.2 mm
+logo-modifier STL for assigning a second filament or modifier role in a slicer.
+The artwork panel also includes a searchable browser for the public
+[`rstudio/hex-stickers`](https://github.com/rstudio/hex-stickers/tree/main/SVG)
+SVG collection. Catalog selections omit the large badge background so their
+foreground artwork remains useful as a one-color modifier; custom uploads are
+preserved exactly as supplied.
+
 ```sh
 cd web-customizer
 npm run dev
