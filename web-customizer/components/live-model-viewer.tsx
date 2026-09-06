@@ -107,6 +107,8 @@ function makeLine(points: number[], color: string) {
   return new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
 }
 
+const ROTATION_HANDLE_OFFSET = 3.7;
+
 function addLogoTransformControls(model: THREE.Group) {
   const lid = model.getObjectByName('holder-lid');
   const logo = model.getObjectByName('lid-svg-logo');
@@ -156,13 +158,20 @@ function addLogoTransformControls(model: THREE.Group) {
   rotationStem.renderOrder = 4;
   controls.add(rotationStem);
   const rotationHandle = new THREE.Mesh(
-    new THREE.TorusGeometry(0.72, 0.15, 6, 20).rotateX(Math.PI / 2),
+    new THREE.TorusGeometry(0.95, 0.2, 8, 28).rotateX(Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: frameColor, depthTest: false }),
   );
   rotationHandle.name = 'logo-rotate-handle';
   rotationHandle.position.y = frameY;
   rotationHandle.renderOrder = 5;
   controls.add(rotationHandle);
+  const rotationHitArea = new THREE.Mesh(
+    new THREE.CircleGeometry(1.55, 28).rotateX(Math.PI / 2),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  rotationHitArea.name = 'logo-rotate-hit-area';
+  rotationHitArea.position.y = frameY + 0.03;
+  controls.add(rotationHitArea);
   lid.add(controls);
   syncLogoTransformControls(lid, logo);
 }
@@ -202,18 +211,21 @@ function syncLogoTransformControls(lid: THREE.Object3D, logo: THREE.Object3D) {
   const stemPosition = rotationStem?.geometry.getAttribute('position');
   if (stemPosition) {
     stemPosition.setXYZ(0, 0, -0.22, topZ);
-    stemPosition.setXYZ(1, 0, -0.22, topZ + 2.2);
+    stemPosition.setXYZ(1, 0, -0.22, topZ + ROTATION_HANDLE_OFFSET);
     stemPosition.needsUpdate = true;
   }
-  const rotationHandle = controls.getObjectByName('logo-rotate-handle');
-  if (rotationHandle) rotationHandle.position.z = topZ + 2.2;
+  controls.traverse((object) => {
+    if (object.name === 'logo-rotate-handle' || object.name === 'logo-rotate-hit-area') {
+      object.position.z = topZ + ROTATION_HANDLE_OFFSET;
+    }
+  });
 }
 
 function interactionFor(object: THREE.Object3D, lid: THREE.Object3D) {
   let current: THREE.Object3D | null = object;
   while (current && current !== lid) {
     if (current.name === 'logo-scale-handle') return 'scale' as const;
-    if (current.name === 'logo-rotate-handle') return 'rotate' as const;
+    if (current.name === 'logo-rotate-handle' || current.name === 'logo-rotate-hit-area') return 'rotate' as const;
     if (current.name === 'logo-move-handle') return 'move' as const;
     current = current.parent;
   }
