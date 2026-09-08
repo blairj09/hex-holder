@@ -92,10 +92,14 @@ for (const testCase of cases) {
   });
   if (meshes === 0 || sourceTriangles === 0) throw new Error(`${testCase.name} produced an empty model.`);
 
-  const printableModel = makePrintableExportModel(model);
+  const printableModel = await makePrintableExportModel(model);
   const printableMeshes = [];
+  let printableTriangles = 0;
   printableModel.traverse((object) => {
-    if (object instanceof Mesh) printableMeshes.push(object);
+    if (!(object instanceof Mesh)) return;
+    printableMeshes.push(object);
+    const position = object.geometry.getAttribute('position');
+    printableTriangles += object.geometry.index ? object.geometry.index.count / 3 : position.count / 3;
   });
   const expectedMeshCount = testCase.part === 'both' ? 2 : 1;
   if (printableMeshes.length !== expectedMeshCount) {
@@ -107,7 +111,7 @@ for (const testCase of cases) {
   const stl = new STLExporter().parse(printableModel, { binary: true });
   const exportedTriangles = stl.getUint32(80, true);
   if (stl.byteLength !== 84 + exportedTriangles * 50) throw new Error(`${testCase.name} produced a malformed binary STL.`);
-  if (exportedTriangles !== sourceTriangles) throw new Error(`${testCase.name} lost triangles during export.`);
+  if (exportedTriangles !== printableTriangles) throw new Error(`${testCase.name} lost triangles during export.`);
 
   console.log(`${testCase.name}: ${printableMeshes.length} printable meshes, ${exportedTriangles.toLocaleString()} triangles, ${(stl.byteLength / 1024).toFixed(0)} KB`);
   disposeHolderModel(printableModel);

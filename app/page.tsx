@@ -257,13 +257,13 @@ export default function Home() {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     let model: ReturnType<typeof buildHolderModel> | null = null;
-    let printableModel: ReturnType<typeof makePrintableExportModel> | null = null;
+    let printableModel: Awaited<ReturnType<typeof makePrintableExportModel>> | null = null;
     let logoModel: ReturnType<typeof buildHolderModel> | null = null;
     try {
       // Keep the holder and lid as one mesh each. The color modifier remains
       // a separate, aligned file for slicers that support multi-color prints.
       model = buildHolderModel({ ...config, logoSvg: null }, { arrangement: 'print', preview: false });
-      printableModel = makePrintableExportModel(model);
+      printableModel = await makePrintableExportModel(model);
       if (!printableModel.children.length) throw new Error('The printable model is empty.');
       // Three.js is Y-up; STL/slicer convention is Z-up.
       printableModel.rotation.x = Math.PI / 2;

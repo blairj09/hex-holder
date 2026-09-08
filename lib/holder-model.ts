@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import createManifold, { type Manifold as ManifoldSolid, type ManifoldToplevel } from 'manifold-3d';
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
@@ -49,6 +50,15 @@ const COMPLEX_MAX_LOGO_CURVES = 5_000;
 const COMPLEX_MAX_SHAPE_CURVES = 320;
 const COMPLEX_LOGO_CURVE_SEGMENTS = 6;
 export const LOGO_POSITION_LIMIT = OUTER_WIDTH * 0.24;
+let manifoldModule: Promise<ManifoldToplevel> | null = null;
+
+function getManifoldModule() {
+  manifoldModule ??= createManifold().then((module) => {
+    module.setup();
+    return module;
+  });
+  return manifoldModule;
+}
 
 export function isComplexSvgForPrint(svg: string) {
   return svg.length > COMPLEX_SVG_SOURCE_LENGTH;
@@ -763,37 +773,87 @@ export function buildHolderModel(
 }
 
 /**
- * Combines the render meshes for each printable item into a single mesh.
+ * Fuses the render meshes for each printable item into a single solid mesh.
  * The preview keeps its separate meshes for materials and edge treatments.
  */
-export function makePrintableExportModel(model: THREE.Object3D) {
+export async function makePrintableExportModel(model: THREE.Object3D) {
   model.updateMatrixWorld(true);
   const printableModel = new THREE.Group();
   printableModel.name = 'printable-hex-sticker-holder';
+  const manifold = await getManifoldModule();
 
   for (const partName of ['holder-body', 'holder-lid']) {
     const part = model.getObjectByName(partName);
     if (!part) continue;
 
-    const geometries: THREE.BufferGeometry[] = [];
+    const solids: ManifoldSolid[] = [];
     part.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
-      // STL only uses triangle positions. Normalizing to an unindexed
-      // position-only geometry lets custom model geometry and SVG/extrude
-      // geometry combine even when their render attributes differ.
-      const sourceGeometry = object.geometry.index ? object.geometry.toNonIndexed() : object.geometry;
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', sourceGeometry.getAttribute('position').clone());
+      const geometry = object.geometry.clone();
       geometry.applyMatrix4(object.matrixWorld);
-      geometries.push(geometry);
-      if (sourceGeometry !== object.geometry) sourceGeometry.dispose();
+      const position = geometry.getAttribute('position');
+      const triVerts = geometry.index
+        ? Uint32Array.from(geometry.index.array)
+        : Uint32Array.from({ length: position.count }, (_, index) => index);
+      const mesh = new manifold.Mesh({
+        numProp: 3,
+        vertProperties: new Float32Array(position.array),
+        triVerts,
+      });
+      mesh.merge();
+      const solid = manifold.Manifold.ofMesh(mesh);
+      geometry.dispose();
+      if (solid.status() !== 'NoError') {
+        solid.delete();
+        throw new Error(`Could not prepare the ${partName} geometry for export.`);
+      }
+      solids.push(solid);
     });
 
-    if (!geometries.length) continue;
-    const geometry = mergeGeometries(geometries, false);
-    for (const sourceGeometry of geometries) sourceGeometry.dispose();
-    if (!geometry) throw new Error(`Could not combine the ${partName} meshes for export.`);
+    if (!solids.length) continue;
+    const fused = manifold.Manifold.union(solids);
+    for (const solid of solids) solid.delete();
+    if (fused.isEmpty() || fused.status() !== 'NoError') {
+      fused.delete();
+      throw new Error(`Could not fuse the ${partName} geometry for export.`);
+    }
+    const components = fused.decompose();
+    const isSingleSolid = components.length === 1;
+    for (const component of components) component.delete();
+    if (!isSingleSolid) {
+      fused.delete();
+      throw new Error(`The ${partName} export contains disconnected solids.`);
+    }
 
+    const fusedMesh = fused.getMesh();
+    fusedMesh.merge();
+    const positions = new Float32Array(fusedMesh.numVert * 3);
+    for (let index = 0; index < fusedMesh.numVert; index += 1) {
+      positions[index * 3] = fusedMesh.vertProperties[index * fusedMesh.numProp];
+      positions[index * 3 + 1] = fusedMesh.vertProperties[index * fusedMesh.numProp + 1];
+      positions[index * 3 + 2] = fusedMesh.vertProperties[index * fusedMesh.numProp + 2];
+    }
+    fused.delete();
+
+    const mergeTarget = Uint32Array.from({ length: fusedMesh.numVert }, (_, index) => index);
+    const mergeFrom = fusedMesh.mergeFromVert ?? new Uint32Array();
+    const mergeTo = fusedMesh.mergeToVert ?? new Uint32Array();
+    for (let index = 0; index < mergeFrom.length; index += 1) mergeTarget[mergeFrom[index]] = mergeTo[index];
+    const rootVertex = (index: number): number => {
+      while (mergeTarget[index] !== index) {
+        mergeTarget[index] = mergeTarget[mergeTarget[index]];
+        index = mergeTarget[index];
+      }
+      return index;
+    };
+    const triangleIndices = Uint32Array.from(fusedMesh.triVerts, rootVertex);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setIndex(new THREE.Uint32BufferAttribute(triangleIndices, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
     mesh.name = partName;
     printableModel.add(mesh);
