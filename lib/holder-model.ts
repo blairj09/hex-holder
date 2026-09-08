@@ -13,14 +13,23 @@ export const LID_FLANGE_HEIGHT = 1.6;
 export const LID_PLUG_HEIGHT = LID_HEIGHT - LID_FLANGE_HEIGHT;
 /** A small 45° relief at the faces printed against the build plate. */
 export const BUILD_PLATE_CHAMFER = 0.6;
+/** A thumb-width opening through the top band of one wall. */
+export const FINGER_NOTCH_HEIGHT = LID_FLANGE_HEIGHT;
 export const LOGO_LAYER_HEIGHT = 0.2;
 const LID_TIP_CHAMFER = LID_PLUG_HEIGHT * 0.1;
+const FINGER_NOTCH_SIDES = [1, 4] as const;
+const FINGER_NOTCHES = [
+  { start: 1, end: 2, previousCorner: 0, nextCorner: 3 },
+  { start: 6, end: 7, previousCorner: 5, nextCorner: 8 },
+] as const;
 
 export type HolderConfig = {
   depth: number;
   cellWidth: number;
   embossed: boolean;
   texture: boolean;
+  /** Defaults to on so newly generated holders include an easy-open recess. */
+  fingerNotch?: boolean;
   part: HolderPart;
   logoSvg?: string | null;
   logoScale?: number;
@@ -35,6 +44,10 @@ export const WALL = INSIDE_WIDTH * (1.5 / 45.3);
 export const OUTER_WIDTH = INSIDE_WIDTH + 2 * WALL;
 const OUTER_RADIUS = OUTER_WIDTH / Math.sqrt(3);
 const OUTER_APOTHEM = OUTER_WIDTH / 2;
+const FINGER_NOTCH_EDGE_FRACTION = 0.22;
+const FINGER_NOTCH_FLOOR_FRACTION = 0.36;
+const FINGER_NOTCH_HALF_WIDTH = OUTER_RADIUS * (0.5 - FINGER_NOTCH_EDGE_FRACTION);
+const FINGER_NOTCH_FLOOR_HALF_WIDTH = OUTER_RADIUS * (0.5 - FINGER_NOTCH_FLOOR_FRACTION);
 const EPSILON = 0.02;
 const LOGO_BASE_WIDTH = 20;
 const LOGO_CURVE_SEGMENTS = 24;
@@ -85,12 +98,31 @@ export function holderMetrics(depth: number) {
   };
 }
 
-function hexLoop(flatToFlat: number, y: number) {
+function hexLoop(flatToFlat: number, y: number, splitFingerEdge = false, fingerNotchFraction = FINGER_NOTCH_EDGE_FRACTION) {
   const radius = flatToFlat / Math.sqrt(3);
-  return Array.from({ length: 6 }, (_, index) => {
+  const corners = Array.from({ length: 6 }, (_, index) => {
     const angle = Math.PI / 6 + index * Math.PI / 3;
     return new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
   });
+
+  if (!splitFingerEdge) return corners;
+
+  // Split opposite edges at the sides of the half-hex finger openings.
+  const edgeStart = corners[0];
+  const edgeEnd = corners[1];
+  const pointOnEdge = (amount: number) => edgeStart.clone().lerp(edgeEnd, amount);
+  return [
+    corners[0],
+    pointOnEdge(fingerNotchFraction),
+    pointOnEdge(1 - fingerNotchFraction),
+    corners[1],
+    corners[2],
+    corners[3],
+    corners[3].clone().lerp(corners[4], fingerNotchFraction),
+    corners[3].clone().lerp(corners[4], 1 - fingerNotchFraction),
+    corners[4],
+    corners[5],
+  ];
 }
 
 function triangleNormal(a: Point, b: Point, c: Point) {
@@ -122,18 +154,60 @@ function connectLoops(
   lower: Point[],
   upper: Point[],
   normalForSide: (index: number) => THREE.Vector3,
+  skippedSegments?: ReadonlySet<number>,
 ) {
-  for (let index = 0; index < 6; index += 1) {
-    const next = (index + 1) % 6;
+  if (lower.length !== upper.length) throw new Error('Loft loops must have the same number of points.');
+  for (let index = 0; index < lower.length; index += 1) {
+    if (skippedSegments?.has(index)) continue;
+    const next = (index + 1) % lower.length;
     pushQuad(positions, lower[index], lower[next], upper[next], upper[index], normalForSide(index));
   }
+}
+
+function hexSideForLoopSegment(index: number) {
+  // Each finger opening splits one hex edge into three segments.
+  return [0, 0, 0, 1, 2, 3, 3, 3, 4, 5][index];
 }
 
 function pushHexCap(positions: number[], loop: Point[], y: number, up: boolean) {
   const center = new THREE.Vector3(0, y, 0);
   const normal = new THREE.Vector3(0, up ? 1 : -1, 0);
-  for (let index = 0; index < 6; index += 1) {
-    pushTriangle(positions, center, loop[index], loop[(index + 1) % 6], normal);
+  for (let index = 0; index < loop.length; index += 1) {
+    pushTriangle(positions, center, loop[index], loop[(index + 1) % loop.length], normal);
+  }
+}
+
+function pushAnnularTopCap(positions: number[], outer: Point[], inner: Point[]) {
+  const contour = outer.map((point) => new THREE.Vector2(point.x, point.z));
+  const innerBoundary = inner.slice().reverse();
+  const hole = innerBoundary.map((point) => new THREE.Vector2(point.x, point.z));
+  const points = [...outer, ...innerBoundary];
+  const triangles = THREE.ShapeUtils.triangulateShape(contour, [hole]);
+  for (const triangle of triangles) {
+    pushTriangle(
+      positions,
+      points[triangle[0]],
+      points[triangle[1]],
+      points[triangle[2]],
+      new THREE.Vector3(0, 1, 0),
+    );
+  }
+}
+
+function pushRimSection(positions: number[], outerBoundary: Point[], innerBoundary: Point[]) {
+  const contour = [...outerBoundary, ...innerBoundary];
+  const triangles = THREE.ShapeUtils.triangulateShape(
+    contour.map((point) => new THREE.Vector2(point.x, point.z)),
+    [],
+  );
+  for (const triangle of triangles) {
+    pushTriangle(
+      positions,
+      contour[triangle[0]],
+      contour[triangle[1]],
+      contour[triangle[2]],
+      new THREE.Vector3(0, 1, 0),
+    );
   }
 }
 
@@ -172,19 +246,22 @@ function cavityWidthAt(y: number, depth: number) {
   return Math.max(baseWidth, grooveWidthAtY, openingWidthAtY);
 }
 
-function createBodyCoreGeometry(depth: number, engraved: boolean) {
+function fingerNotchStart(depth: number) {
+  return Math.max(holderMetrics(depth).floor, holderMetrics(depth).height - FINGER_NOTCH_HEIGHT);
+}
+
+function fingerNotchFractionAt(y: number, depth: number) {
+  const start = fingerNotchStart(depth);
+  const progress = THREE.MathUtils.clamp((y - start) / FINGER_NOTCH_HEIGHT, 0, 1);
+  return THREE.MathUtils.lerp(FINGER_NOTCH_FLOOR_FRACTION, FINGER_NOTCH_EDGE_FRACTION, progress);
+}
+
+function createBodyCoreGeometry(depth: number, engraved: boolean, fingerNotch: boolean) {
   const floor = depth * (1.8 / 30);
   const bodyHeight = depth + floor;
   const textureDepth = WALL * (0.5 / 1.5);
   const shellWidth = engraved ? OUTER_WIDTH - 2 * textureDepth : OUTER_WIDTH;
-  const outerLayers = uniqueLayers([
-    { y: 0, flatToFlat: OUTER_WIDTH - BUILD_PLATE_CHAMFER * 2 },
-    { y: BUILD_PLATE_CHAMFER, flatToFlat: OUTER_WIDTH },
-    { y: floor, flatToFlat: OUTER_WIDTH },
-    { y: Math.min(bodyHeight, floor + EPSILON), flatToFlat: shellWidth },
-    { y: bodyHeight, flatToFlat: shellWidth },
-  ]);
-
+  const notchStart = fingerNotchStart(depth);
   const plugHeight = LID_PLUG_HEIGHT;
   const straightHeight = plugHeight - plugHeight * (0.6 / 6);
   const grooveCenter = bodyHeight - 0.55 * straightHeight;
@@ -198,24 +275,46 @@ function createBodyCoreGeometry(depth: number, engraved: boolean) {
     grooveCenter,
     grooveCenter + grooveHalf,
     openingStart,
+    ...(fingerNotch ? [notchStart] : []),
     bodyHeight,
   ].filter((value) => value >= floor && value <= bodyHeight);
   const innerLayers = uniqueLayers(cavityBreaks.map((y) => ({ y, flatToFlat: cavityWidthAt(y, depth) })));
+  const outerLayers = uniqueLayers([
+    { y: 0, flatToFlat: OUTER_WIDTH - BUILD_PLATE_CHAMFER * 2 },
+    { y: BUILD_PLATE_CHAMFER, flatToFlat: OUTER_WIDTH },
+    { y: floor, flatToFlat: OUTER_WIDTH },
+    { y: Math.min(bodyHeight, floor + EPSILON), flatToFlat: shellWidth },
+    ...(fingerNotch
+      ? cavityBreaks.filter((y) => y >= notchStart).map((y) => ({ y, flatToFlat: shellWidth }))
+      : []),
+    { y: bodyHeight, flatToFlat: shellWidth },
+  ]);
   const positions: number[] = [];
-  const outerLoops = outerLayers.map((layer) => hexLoop(layer.flatToFlat, layer.y));
-  const innerLoops = innerLayers.map((layer) => hexLoop(layer.flatToFlat, layer.y));
+  const outerLoops = outerLayers.map((layer) => hexLoop(
+    layer.flatToFlat,
+    layer.y,
+    fingerNotch,
+    fingerNotchFractionAt(layer.y, depth),
+  ));
+  const innerLoops = innerLayers.map((layer) => hexLoop(
+    layer.flatToFlat,
+    layer.y,
+    fingerNotch,
+    fingerNotchFractionAt(layer.y, depth),
+  ));
+  const notchOpening = new Set(FINGER_NOTCHES.map((notch) => notch.start));
 
   for (let index = 0; index < outerLoops.length - 1; index += 1) {
     connectLoops(positions, outerLoops[index], outerLoops[index + 1], (side) => {
-      const angle = Math.PI / 3 + side * Math.PI / 3;
+      const angle = Math.PI / 3 + (fingerNotch ? hexSideForLoopSegment(side) : side) * Math.PI / 3;
       return new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
-    });
+    }, fingerNotch && outerLayers[index].y >= notchStart ? notchOpening : undefined);
   }
   for (let index = 0; index < innerLoops.length - 1; index += 1) {
     connectLoops(positions, innerLoops[index], innerLoops[index + 1], (side) => {
-      const angle = Math.PI / 3 + side * Math.PI / 3;
+      const angle = Math.PI / 3 + (fingerNotch ? hexSideForLoopSegment(side) : side) * Math.PI / 3;
       return new THREE.Vector3(-Math.cos(angle), 0, -Math.sin(angle));
-    });
+    }, fingerNotch && innerLayers[index].y >= notchStart ? notchOpening : undefined);
   }
 
   pushHexCap(positions, outerLoops[0], outerLayers[0].y, false);
@@ -223,9 +322,28 @@ function createBodyCoreGeometry(depth: number, engraved: boolean) {
 
   const outerTop = outerLoops.at(-1)!;
   const innerTop = innerLoops.at(-1)!;
-  for (let index = 0; index < 6; index += 1) {
-    const next = (index + 1) % 6;
-    pushQuad(positions, outerTop[index], outerTop[next], innerTop[next], innerTop[index], new THREE.Vector3(0, 1, 0));
+  if (fingerNotch) {
+    const outerNotchBase = outerLoops.find((_, index) => Math.abs(outerLayers[index].y - notchStart) < 0.001)!;
+    const innerNotchBase = innerLoops.find((_, index) => Math.abs(innerLayers[index].y - notchStart) < 0.001)!;
+    for (const notch of FINGER_NOTCHES) {
+      const tangent = outerNotchBase[notch.nextCorner].clone().sub(outerNotchBase[notch.previousCorner]).normalize();
+      pushQuad(positions, outerNotchBase[notch.start], outerNotchBase[notch.end], innerNotchBase[notch.end], innerNotchBase[notch.start], new THREE.Vector3(0, 1, 0));
+      for (let index = 0; index < innerLoops.length - 1; index += 1) {
+        if (innerLayers[index].y < notchStart) continue;
+        const outerLower = outerLoops.find((_, outerIndex) => Math.abs(outerLayers[outerIndex].y - innerLayers[index].y) < 0.001)!;
+        const outerUpper = outerLoops.find((_, outerIndex) => Math.abs(outerLayers[outerIndex].y - innerLayers[index + 1].y) < 0.001)!;
+        pushQuad(positions, outerLower[notch.start], innerLoops[index][notch.start], innerLoops[index + 1][notch.start], outerUpper[notch.start], tangent);
+        pushQuad(positions, outerLower[notch.end], outerUpper[notch.end], innerLoops[index + 1][notch.end], innerLoops[index][notch.end], tangent.clone().negate());
+      }
+    }
+    pushRimSection(positions, outerTop.slice(2, 7), innerTop.slice(2, 7).reverse());
+    pushRimSection(
+      positions,
+      [outerTop[7], outerTop[8], outerTop[9], outerTop[0], outerTop[1]],
+      [innerTop[1], innerTop[0], innerTop[9], innerTop[8], innerTop[7]],
+    );
+  } else {
+    pushAnnularTopCap(positions, outerTop, innerTop);
   }
 
   return geometryFromPositions(positions);
@@ -246,7 +364,7 @@ function createHexLoftGeometry(layers: LoftLayer[]) {
   return geometryFromPositions(positions);
 }
 
-function honeycombCenters(depth: number, cellWidth: number) {
+function honeycombCenters(depth: number, cellWidth: number, maximumY = Infinity) {
   const floor = depth * (1.8 / 30);
   const bodyHeight = depth + floor;
   const marginTop = depth * (2 / 30);
@@ -269,7 +387,9 @@ function honeycombCenters(depth: number, cellWidth: number) {
     const maxColumn = Math.ceil(halfWidth / cellWidth) + 2;
     for (let column = -maxColumn; column <= maxColumn; column += 1) {
       const u = column * cellWidth + offset;
-      if (u - cellWidth / 2 >= -halfWidth && u + cellWidth / 2 <= halfWidth) centers.push({ u, y });
+      if (u - cellWidth / 2 >= -halfWidth && u + cellWidth / 2 <= halfWidth && y + radius <= maximumY) {
+        centers.push({ u, y });
+      }
     }
   }
   return centers;
@@ -302,11 +422,12 @@ function faceTransform(geometry: THREE.BufferGeometry, side: number, normalOffse
   return geometry;
 }
 
-function createTextureGeometry(depth: number, cellWidth: number, embossed: boolean, side: number) {
+function createTextureGeometry(depth: number, cellWidth: number, embossed: boolean, side: number, maximumY = Infinity) {
   const textureDepth = WALL * (0.5 / 1.5);
   const bodyHeight = holderMetrics(depth).height;
   const cutWidth = Math.max(1, cellWidth - 0.8);
-  const centers = honeycombCenters(depth, cellWidth);
+  const textureTop = Math.min(bodyHeight, maximumY);
+  const centers = honeycombCenters(depth, cellWidth, textureTop);
   let geometry: THREE.ExtrudeGeometry;
 
   if (embossed) {
@@ -326,8 +447,8 @@ function createTextureGeometry(depth: number, cellWidth: number, embossed: boole
   // reaches the bed at the full outer width and hides the body's chamfer.
   face.moveTo(-OUTER_RADIUS / 2, BUILD_PLATE_CHAMFER);
   face.lineTo(OUTER_RADIUS / 2, BUILD_PLATE_CHAMFER);
-  face.lineTo(OUTER_RADIUS / 2, bodyHeight);
-  face.lineTo(-OUTER_RADIUS / 2, bodyHeight);
+  face.lineTo(OUTER_RADIUS / 2, textureTop);
+  face.lineTo(-OUTER_RADIUS / 2, textureTop);
   face.closePath();
   face.holes = centers.map(({ u, y }) => hexShape(cutWidth, u, y, true));
   geometry = new THREE.ExtrudeGeometry(face, {
@@ -339,13 +460,38 @@ function createTextureGeometry(depth: number, cellWidth: number, embossed: boole
   return faceTransform(geometry, side, OUTER_APOTHEM - textureDepth - EPSILON);
 }
 
-function createTextureOutlineGeometry(depth: number, cellWidth: number, embossed: boolean, side: number) {
+function createFingerNotchSideSkinGeometry(depth: number, side: number) {
+  const textureDepth = WALL * (0.5 / 1.5);
+  const top = holderMetrics(depth).height;
+  const bottom = fingerNotchStart(depth) - EPSILON;
+  const leftPanel = new THREE.Shape();
+  leftPanel.moveTo(-OUTER_RADIUS / 2, bottom);
+  leftPanel.lineTo(-FINGER_NOTCH_FLOOR_HALF_WIDTH, bottom);
+  leftPanel.lineTo(-FINGER_NOTCH_HALF_WIDTH, top);
+  leftPanel.lineTo(-OUTER_RADIUS / 2, top);
+  leftPanel.closePath();
+  const rightPanel = new THREE.Shape();
+  rightPanel.moveTo(FINGER_NOTCH_FLOOR_HALF_WIDTH, bottom);
+  rightPanel.lineTo(OUTER_RADIUS / 2, bottom);
+  rightPanel.lineTo(OUTER_RADIUS / 2, top);
+  rightPanel.lineTo(FINGER_NOTCH_HALF_WIDTH, top);
+  rightPanel.closePath();
+  const geometry = new THREE.ExtrudeGeometry([leftPanel, rightPanel], {
+    depth: textureDepth + EPSILON,
+    bevelEnabled: false,
+    curveSegments: 1,
+    steps: 1,
+  });
+  return faceTransform(geometry, side, OUTER_APOTHEM - textureDepth - EPSILON);
+}
+
+function createTextureOutlineGeometry(depth: number, cellWidth: number, embossed: boolean, side: number, maximumY = Infinity) {
   const textureDepth = WALL * (0.5 / 1.5);
   const cutWidth = Math.max(1, cellWidth - 0.8);
   const radius = cutWidth / Math.sqrt(3);
   const positions: number[] = [];
 
-  for (const { u, y } of honeycombCenters(depth, cellWidth)) {
+  for (const { u, y } of honeycombCenters(depth, cellWidth, maximumY)) {
     for (let index = 0; index < 6; index += 1) {
       const angle = Math.PI / 2 + index * Math.PI / 3;
       const nextAngle = Math.PI / 2 + (index + 1) * Math.PI / 3;
@@ -381,7 +527,8 @@ function makeBody(config: HolderConfig, preview: boolean) {
   const group = new THREE.Group();
   group.name = 'holder-body';
   const engraved = config.texture && !config.embossed;
-  const core = new THREE.Mesh(createBodyCoreGeometry(config.depth, engraved), standardMaterial('#f3f6f4'));
+  const fingerNotch = config.fingerNotch ?? true;
+  const core = new THREE.Mesh(createBodyCoreGeometry(config.depth, engraved, fingerNotch), standardMaterial('#f3f6f4'));
   core.name = 'body-core';
   core.castShadow = true;
   core.receiveShadow = true;
@@ -390,17 +537,28 @@ function makeBody(config: HolderConfig, preview: boolean) {
 
   if (config.texture) {
     for (let side = 0; side < 6; side += 1) {
+      // Leave the opening face plain above the recess. Texture there would
+      // bridge the notch and make the lid harder, rather than easier, to lift.
+      const isNotchedSide = FINGER_NOTCH_SIDES.some((notchSide) => notchSide === side);
+      const maximumY = fingerNotch && isNotchedSide ? fingerNotchStart(config.depth) : Infinity;
       const feature = new THREE.Mesh(
-        createTextureGeometry(config.depth, config.cellWidth, config.embossed, side),
+        createTextureGeometry(config.depth, config.cellWidth, config.embossed, side, maximumY),
         standardMaterial(config.embossed ? '#ffffff' : '#e7eeea'),
       );
       feature.name = config.embossed ? 'raised-honeycomb' : 'engraved-honeycomb-ridges';
       feature.castShadow = true;
       group.add(feature);
 
+      if (fingerNotch && !config.embossed && isNotchedSide) {
+        const skin = new THREE.Mesh(createFingerNotchSideSkinGeometry(config.depth, side), standardMaterial('#e7eeea'));
+        skin.name = 'finger-notch-sidewall';
+        skin.castShadow = true;
+        group.add(skin);
+      }
+
       if (preview) {
         const outlines = new THREE.LineSegments(
-          createTextureOutlineGeometry(config.depth, config.cellWidth, config.embossed, side),
+          createTextureOutlineGeometry(config.depth, config.cellWidth, config.embossed, side, maximumY),
           new THREE.LineBasicMaterial({
             color: config.embossed ? '#7e9189' : '#657d73',
             transparent: true,

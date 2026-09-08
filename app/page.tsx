@@ -59,6 +59,7 @@ export default function Home() {
   const [cellWidth, setCellWidth] = useState(3.9);
   const [embossed, setEmbossed] = useState(false);
   const [texture, setTexture] = useState(true);
+  const [fingerNotch, setFingerNotch] = useState(true);
   const [part, setPart] = useState<HolderPart>('both');
   const [logoSvg, setLogoSvg] = useState<string | null>(null);
   const [logoScale, setLogoScale] = useState(1);
@@ -75,14 +76,14 @@ export default function Home() {
   const [resetToken, setResetToken] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState('');
-  const configRef = useRef<AppConfig>({ stickerCapacity, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled });
+  const configRef = useRef<AppConfig>({ stickerCapacity, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled });
 
   const depth = depthForStickerCapacity(stickerCapacity);
-  const config: HolderConfig = { depth, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly };
+  const config: HolderConfig = { depth, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly };
 
   useEffect(() => {
-    configRef.current = { stickerCapacity, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled };
-  }, [stickerCapacity, cellWidth, embossed, texture, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled]);
+    configRef.current = { stickerCapacity, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled };
+  }, [stickerCapacity, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled]);
 
   async function loadCatalog(force = false) {
     if (!force && (catalogState === 'ready' || catalogState === 'loading')) return;
@@ -133,6 +134,7 @@ export default function Home() {
           cellWidth: { type: 'number', minimum: 1.8, maximum: 8, description: 'Honeycomb flat-to-flat width in millimetres.' },
           embossed: { type: 'boolean', description: 'Raise the honeycomb cells instead of engraving them.' },
           texture: { type: 'boolean', description: 'Show and export the honeycomb texture.' },
+          fingerNotch: { type: 'boolean', description: 'Add a thumb-width recess under one lid edge.' },
           part: { type: 'string', enum: ['body', 'lid', 'both'] },
           assembled: { type: 'boolean', description: 'Show the lid seated on the holder. This does not affect the print layout.' },
         },
@@ -144,7 +146,7 @@ export default function Home() {
         const next = { ...configRef.current, ...(input as Partial<AppConfig>) };
         if (!isStickerCapacity(next.stickerCapacity)) throw new Error('stickerCapacity must be 25, 50, 75, or 100.');
         if (!isNumber(next.cellWidth) || next.cellWidth < 1.8 || next.cellWidth > 8) throw new Error('cellWidth must be between 1.8 and 8 mm.');
-        if (typeof next.texture !== 'boolean' || typeof next.embossed !== 'boolean' || typeof next.assembled !== 'boolean' || !isPart(next.part)) {
+        if (typeof next.texture !== 'boolean' || typeof next.embossed !== 'boolean' || typeof next.fingerNotch !== 'boolean' || typeof next.assembled !== 'boolean' || !isPart(next.part)) {
           throw new Error('The supplied finish or output selection is invalid.');
         }
         if (!next.texture) next.embossed = false;
@@ -153,6 +155,7 @@ export default function Home() {
         setCellWidth(next.cellWidth);
         setEmbossed(next.embossed);
         setTexture(next.texture);
+        setFingerNotch(next.fingerNotch);
         setPart(next.part);
         setAssembled(next.assembled);
         setStatus('');
@@ -371,6 +374,17 @@ export default function Home() {
                   />
                 </>
               )}
+            </fieldset>
+
+            <fieldset className="space-y-4 border-t border-[#e2e9eb] pt-4">
+              <legend className="text-xs font-semibold uppercase tracking-[0.12em] text-[#648087]">Lid fit</legend>
+              <ToggleRow
+                id="finger-notch"
+                label="Lid notch"
+                description="Adds matching half-hex openings on opposite walls to expose the lid edge."
+                checked={fingerNotch}
+                onCheckedChange={(enabled) => { setFingerNotch(enabled); setStatus(''); }}
+              />
             </fieldset>
 
             <fieldset className="space-y-4 border-t border-[#e2e9eb] pt-4">

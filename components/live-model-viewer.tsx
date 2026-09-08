@@ -513,6 +513,7 @@ export function LiveModelViewer(props: ViewerProps) {
       cellWidth: props.cellWidth,
       embossed: props.embossed,
       texture: props.texture,
+      fingerNotch: props.fingerNotch,
       part: props.part,
       logoSvg: props.logoSvg,
       logoScale: props.logoScale,
@@ -633,7 +634,7 @@ export function LiveModelViewer(props: ViewerProps) {
       cancelAnimationFrame(animationFrame);
       controls.enabled = true;
     };
-  }, [props.depth, props.cellWidth, props.embossed, props.texture, props.part, props.logoSvg, props.logoScale, props.logoX, props.logoZ, props.logoRotation, props.logoForegroundOnly, props.assembled, props.resetToken]);
+  }, [props.depth, props.cellWidth, props.embossed, props.texture, props.fingerNotch, props.part, props.logoSvg, props.logoScale, props.logoX, props.logoZ, props.logoRotation, props.logoForegroundOnly, props.assembled, props.resetToken]);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">

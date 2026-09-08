@@ -6,6 +6,7 @@ import {
   buildHolderModel,
   depthForStickerCapacity,
   disposeHolderModel,
+  FINGER_NOTCH_HEIGHT,
   LID_HEIGHT,
   LID_PLUG_HEIGHT,
   LOGO_LAYER_HEIGHT,
@@ -172,6 +173,49 @@ for (const mesh of [chamferedBody, chamferedLid]) {
   }
 }
 disposeHolderModel(chamferModel);
+
+const fingerNotchModel = buildHolderModel({
+  depth: depthForStickerCapacity(50),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: false,
+  fingerNotch: true,
+  part: 'body',
+}, { arrangement: 'print', preview: false });
+const fingerNotchCore = fingerNotchModel.getObjectByName('body-core');
+if (!(fingerNotchCore instanceof Mesh)) throw new Error('Finger notch body core is missing.');
+const notchHeight = new Box3().setFromObject(fingerNotchCore).max.y;
+const notchFloor = notchHeight - FINGER_NOTCH_HEIGHT;
+const notchPositions = fingerNotchCore.geometry.getAttribute('position');
+let notchFloorTriangles = 0;
+for (let index = 0; index < notchPositions.count; index += 3) {
+  const yValues = [notchPositions.getY(index), notchPositions.getY(index + 1), notchPositions.getY(index + 2)];
+  if (yValues.every((y) => Math.abs(y - notchFloor) < 0.0001)) {
+    notchFloorTriangles += 1;
+  }
+}
+if (notchFloorTriangles !== 4) throw new Error('Finger openings do not stop at closed flange-height floors.');
+disposeHolderModel(fingerNotchModel);
+
+const plainBodyModel = buildHolderModel({
+  depth: depthForStickerCapacity(50),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: false,
+  fingerNotch: false,
+  part: 'body',
+}, { arrangement: 'print', preview: false });
+const plainBodyCore = plainBodyModel.getObjectByName('body-core');
+if (!(plainBodyCore instanceof Mesh)) throw new Error('Plain body core is missing.');
+const plainPositions = plainBodyCore.geometry.getAttribute('position');
+for (let index = 0; index < plainPositions.count; index += 3) {
+  const yValues = [plainPositions.getY(index), plainPositions.getY(index + 1), plainPositions.getY(index + 2)];
+  if (yValues.every((y) => Math.abs(y - notchFloor) < 0.0001)) {
+    throw new Error('Finger opening remains when the option is disabled.');
+  }
+}
+disposeHolderModel(plainBodyModel);
+console.log('finger opening recess verified');
 
 const texturedChamferModel = buildHolderModel({
   depth: depthForStickerCapacity(25),
