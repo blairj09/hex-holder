@@ -1,62 +1,76 @@
-# Hex sticker holder — Build123d edition
+# Hex Sticker Holder
 
-`hex_sticker_holder.py` is a parametric Build123d translation of the supplied
-OpenSCAD model.  It generates the same two printable solids: a textured body
-with a chamfered internal pocket and snap groove, plus a flanged lid with a
-tapered, beaded plug.
+Hex Sticker Holder is a browser tool and a parametric CAD model for printable hex sticker holders.
 
-Use [UV](https://docs.astral.sh/uv/) to create the project environment and
-export the default model:
+Use the browser tool to set the holder size, add lid artwork, inspect the model, and download STL files.
+Use the Python model to create STEP and STL files from the command line.
+
+[Open the browser tool](https://hex-sticker-holder.james-m-blair09.chatgpt.site)
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `web-customizer/` | The browser tool. It creates models and STL files in the browser. |
+| `hex_sticker_holder.py` | The Build123d command-line model. |
+| `hex-sticker-holder.scad` | The source OpenSCAD model. |
+
+## Use the browser tool
+
+The browser tool needs Node.js 22.13 or later.
+
+```sh
+cd web-customizer
+npm ci
+npm run dev
+```
+
+Open the local address that the development server shows.
+
+Use these commands before you publish a change:
+
+```sh
+npm run lint
+npm run test:model
+npm run build
+```
+
+## Lid artwork
+
+You can choose an SVG from the logo browser or upload your own SVG.
+
+- Catalog logos remove their badge background. The tool simplifies dense artwork for a reliable 0.2 mm print modifier.
+- Uploaded SVG files keep every filled contour. The tool converts the artwork to black.
+- In the assembled preview, select the artwork to show its controls. Drag it to move it. Use a corner to scale it. Use the round handle to rotate it.
+- Press Delete or Backspace to remove selected artwork.
+
+The STL download includes the holder and, when artwork is present, an aligned 0.2 mm lid modifier.
+
+## Use the Build123d model
+
+The command-line model needs Python 3.10 through 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync
 uv run python hex_sticker_holder.py
 ```
 
-This writes `hex-sticker-holder-body.step`, `hex-sticker-holder-body.stl`,
-`hex-sticker-holder-lid.step`, and `hex-sticker-holder-lid.stl` in `build/`.
-The default void is 46 mm flat-to-flat and 30 mm deep.  These are the two
-dimensions that control the design; the shell, lid, texture, chamfers, and
-snap fit retain their source-model proportions.
+The command writes body and lid STEP and STL files to `build/`.
+
+Set the holder size with these options:
 
 ```sh
-# Change the core dimensions and export just the body
 uv run python hex_sticker_holder.py --void-width 50 --void-depth 35 --part body
-
-# Raised honeycomb instead of engraved honeycomb
-uv run python hex_sticker_holder.py --emboss
-
-# A clean, untextured holder
-uv run python hex_sticker_holder.py --no-texture
 ```
 
-Use `--part both_exploded` to export one combined STEP/STL assembly with the
-lid positioned above the body.  Run `uv run python hex_sticker_holder.py
---help` for the complete command line interface.
+Use `--emboss` for raised honeycomb. Use `--no-texture` for a smooth holder.
 
-## Browser customizer
-
-`web-customizer/` contains a local, browser-only configurator. One parametric
-Three.js mesh powers both the rotatable live model and direct binary STL export,
-so updates and downloads do not require OpenSCAD, Python, a server-side CAD
-process, or WebAssembly. Sticker capacity is selectable in 25, 50, 75, or 100
-sticker increments, using 0.25 mm of stack space per sticker. The complete lid
-stays 6 mm tall at every capacity: a 1.6 mm flange plus a 4.4 mm plug. The body
-adds that fixed 4.4 mm intrusion above the selected sticker space.
-
-An uploaded SVG previews in black on the white lid. Downloads include the
-printable holder STL and, when artwork is present, an aligned 0.2 mm
-logo-modifier STL for assigning a second filament or modifier role in a slicer.
-The artwork panel also includes a searchable browser for the public
-[`rstudio/hex-stickers`](https://github.com/rstudio/hex-stickers/tree/main/SVG)
-SVG collection. Catalog selections omit the large badge background so their
-foreground artwork remains useful as a one-color modifier; custom uploads are
-preserved exactly as supplied.
+Run the following command for all options:
 
 ```sh
-cd web-customizer
-npm run dev
+uv run python hex_sticker_holder.py --help
 ```
 
-Run `npm run test:model` to smoke-test the default and boundary configurations,
-including watertight component meshes and binary STL structure.
+## License
+
+This repository does not include a license. Get permission before you reuse its code or design files.

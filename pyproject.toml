@@ -8,5 +8,10 @@ dependencies = [
     "build123d>=0.8",
 ]
 
+[project.urls]
+Homepage = "https://hex-sticker-holder.james-m-blair09.chatgpt.site"
+Repository = "https://github.com/blairj09/hex-holder"
+Issues = "https://github.com/blairj09/hex-holder/issues"
+
 [tool.uv]
 package = false

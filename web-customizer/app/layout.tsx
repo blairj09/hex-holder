@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Hex Holder Lab',
-  description: 'Browser-local parametric STL generation for hex sticker holders.',
+  title: 'Hex Sticker Holder',
+  description: 'Create printable hex sticker holders and lid artwork in your browser.',
 };
 
 export default function RootLayout({
