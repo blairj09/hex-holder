@@ -2,8 +2,6 @@
 
 Hex Sticker Holder creates printable STL files for hex sticker holders in your browser.
 
-[Open the app](https://hex-sticker-holder.james-m-blair09.chatgpt.site)
-
 ## Start
 
 The app needs Node.js 22.13 or later.
