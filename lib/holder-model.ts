@@ -763,6 +763,46 @@ export function buildHolderModel(
 }
 
 /**
+ * Combines the render meshes for each printable item into a single mesh.
+ * The preview keeps its separate meshes for materials and edge treatments.
+ */
+export function makePrintableExportModel(model: THREE.Object3D) {
+  model.updateMatrixWorld(true);
+  const printableModel = new THREE.Group();
+  printableModel.name = 'printable-hex-sticker-holder';
+
+  for (const partName of ['holder-body', 'holder-lid']) {
+    const part = model.getObjectByName(partName);
+    if (!part) continue;
+
+    const geometries: THREE.BufferGeometry[] = [];
+    part.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      // STL only uses triangle positions. Normalizing to an unindexed
+      // position-only geometry lets custom model geometry and SVG/extrude
+      // geometry combine even when their render attributes differ.
+      const sourceGeometry = object.geometry.index ? object.geometry.toNonIndexed() : object.geometry;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', sourceGeometry.getAttribute('position').clone());
+      geometry.applyMatrix4(object.matrixWorld);
+      geometries.push(geometry);
+      if (sourceGeometry !== object.geometry) sourceGeometry.dispose();
+    });
+
+    if (!geometries.length) continue;
+    const geometry = mergeGeometries(geometries, false);
+    for (const sourceGeometry of geometries) sourceGeometry.dispose();
+    if (!geometry) throw new Error(`Could not combine the ${partName} meshes for export.`);
+
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.name = partName;
+    printableModel.add(mesh);
+  }
+
+  return printableModel;
+}
+
+/**
  * Makes a standalone logo mesh with the exact world transform it has in the
  * printable holder layout. STL cannot retain scene hierarchy, so preserving
  * this transform is what keeps a separately imported modifier aligned.

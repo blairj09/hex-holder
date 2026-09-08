@@ -10,6 +10,7 @@ import {
   LID_PLUG_HEIGHT,
   LOGO_LAYER_HEIGHT,
   makeLogoModifierExportModel,
+  makePrintableExportModel,
   OUTER_WIDTH,
   stickerStackHeight,
 } from '../lib/holder-model.ts';
@@ -91,14 +92,25 @@ for (const testCase of cases) {
   });
   if (meshes === 0 || sourceTriangles === 0) throw new Error(`${testCase.name} produced an empty model.`);
 
-  model.rotation.x = Math.PI / 2;
-  model.updateMatrixWorld(true);
-  const stl = new STLExporter().parse(model, { binary: true });
+  const printableModel = makePrintableExportModel(model);
+  const printableMeshes = [];
+  printableModel.traverse((object) => {
+    if (object instanceof Mesh) printableMeshes.push(object);
+  });
+  const expectedMeshCount = testCase.part === 'both' ? 2 : 1;
+  if (printableMeshes.length !== expectedMeshCount) {
+    throw new Error(`${testCase.name} exported ${printableMeshes.length} meshes instead of ${expectedMeshCount}.`);
+  }
+
+  printableModel.rotation.x = Math.PI / 2;
+  printableModel.updateMatrixWorld(true);
+  const stl = new STLExporter().parse(printableModel, { binary: true });
   const exportedTriangles = stl.getUint32(80, true);
   if (stl.byteLength !== 84 + exportedTriangles * 50) throw new Error(`${testCase.name} produced a malformed binary STL.`);
   if (exportedTriangles !== sourceTriangles) throw new Error(`${testCase.name} lost triangles during export.`);
 
-  console.log(`${testCase.name}: ${meshes} meshes, ${exportedTriangles.toLocaleString()} triangles, ${(stl.byteLength / 1024).toFixed(0)} KB`);
+  console.log(`${testCase.name}: ${printableMeshes.length} printable meshes, ${exportedTriangles.toLocaleString()} triangles, ${(stl.byteLength / 1024).toFixed(0)} KB`);
+  disposeHolderModel(printableModel);
   disposeHolderModel(model);
 }
 

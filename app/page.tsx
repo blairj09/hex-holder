@@ -18,6 +18,7 @@ import {
   INSIDE_WIDTH,
   isComplexSvgForPrint,
   LID_PLUG_HEIGHT,
+  makePrintableExportModel,
   makeLogoModifierExportModel,
   STICKER_CAPACITIES,
   stickerStackHeight,
@@ -256,17 +257,20 @@ export default function Home() {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     let model: ReturnType<typeof buildHolderModel> | null = null;
+    let printableModel: ReturnType<typeof makePrintableExportModel> | null = null;
     let logoModel: ReturnType<typeof buildHolderModel> | null = null;
     try {
-      // STL has no material/part identity. Keep the printable holder and the
-      // color-modifier volume as two aligned files for the slicer to combine.
+      // Keep the holder and lid as one mesh each. The color modifier remains
+      // a separate, aligned file for slicers that support multi-color prints.
       model = buildHolderModel({ ...config, logoSvg: null }, { arrangement: 'print', preview: false });
+      printableModel = makePrintableExportModel(model);
+      if (!printableModel.children.length) throw new Error('The printable model is empty.');
       // Three.js is Y-up; STL/slicer convention is Z-up.
-      model.rotation.x = Math.PI / 2;
-      model.updateMatrixWorld(true);
+      printableModel.rotation.x = Math.PI / 2;
+      printableModel.updateMatrixWorld(true);
       const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
       const exporter = new STLExporter();
-      const data = exporter.parse(model, { binary: true });
+      const data = exporter.parse(printableModel, { binary: true });
       const triangleCount = data.getUint32(80, true);
       if (triangleCount === 0 || data.byteLength !== 84 + triangleCount * 50) throw new Error('The exported STL is incomplete.');
 
@@ -313,6 +317,7 @@ export default function Home() {
       console.error(error);
       setStatus(error instanceof Error ? error.message : 'The STL could not be created.');
     } finally {
+      if (printableModel) disposeHolderModel(printableModel);
       if (model) disposeHolderModel(model);
       if (logoModel) disposeHolderModel(logoModel);
       setIsExporting(false);
