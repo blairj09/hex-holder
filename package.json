@@ -1,5 +1,5 @@
 {
-  "name": "hex-sticker-holder-customizer",
+  "name": "hex-sticker-holder",
   "version": "0.1.0",
   "description": "A browser tool that creates printable hex sticker holder STL files.",
   "private": true,

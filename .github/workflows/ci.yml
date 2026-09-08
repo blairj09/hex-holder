@@ -8,35 +8,21 @@ permissions:
   contents: read
 
 jobs:
-  model:
-    name: Build the CAD model
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Install the Python packages
-        run: uv sync --locked
-      - name: Show the model options
-        run: uv run python hex_sticker_holder.py --help
-
   web:
-    name: Build the browser tool
+    name: Build the app
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web-customizer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web-customizer/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install the Node.js packages
         run: npm ci
       - name: Lint the source
         run: npm run lint
       - name: Test the model
         run: npm run test:model
-      - name: Build the browser tool
+      - name: Build the app
         run: npm run build

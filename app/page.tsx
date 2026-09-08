@@ -122,7 +122,7 @@ export default function Home() {
     const isPart = (value: unknown): value is HolderPart => value === 'body' || value === 'lid' || value === 'both';
 
     void Promise.resolve(context.registerTool({
-      name: 'configure_hex_sticker_holder',
+      name: 'configure_sticker_holder',
       title: 'Configure hex sticker holder',
       description: 'Set the sticker capacity, honeycomb finish, output parts, and visible arrangement. The inside width is fixed at 46 mm.',
       inputSchema: {
