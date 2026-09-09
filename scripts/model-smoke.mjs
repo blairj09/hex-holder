@@ -9,6 +9,8 @@ import {
   FINGER_NOTCH_HEIGHT,
   LID_HEIGHT,
   LID_PLUG_HEIGHT,
+  MAX_LID_TOLERANCE,
+  MIN_LID_TOLERANCE,
   LOGO_LAYER_HEIGHT,
   makeLogoModifierExportModel,
   makePrintableExportModel,
@@ -150,6 +152,26 @@ for (const capacity of [25, 50, 75, 100]) {
 }
 
 console.log('6 mm fixed lid dimensions and sticker-space allowance verified');
+
+const lidFitModels = [MIN_LID_TOLERANCE, 0, MAX_LID_TOLERANCE].map((lidTolerance) => buildHolderModel({
+  depth: depthForStickerCapacity(50),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: false,
+  lidTolerance,
+  part: 'lid',
+}, { arrangement: 'print', preview: false }));
+const lidPlugs = lidFitModels.map((model) => model.getObjectByName('lid-plug'));
+if (!lidPlugs.every((plug) => plug instanceof Mesh)) throw new Error('Lid tolerance test is missing a lid plug.');
+const tightPlugWidth = new Box3().setFromObject(lidPlugs[0]).getSize(new Vector3()).x;
+const defaultPlugWidth = new Box3().setFromObject(lidPlugs[1]).getSize(new Vector3()).x;
+const loosePlugWidth = new Box3().setFromObject(lidPlugs[2]).getSize(new Vector3()).x;
+if (Math.abs(tightPlugWidth - defaultPlugWidth - 2 * Math.abs(MIN_LID_TOLERANCE)) > 0.0001
+  || Math.abs(defaultPlugWidth - loosePlugWidth - 2 * MAX_LID_TOLERANCE) > 0.0001) {
+  throw new Error('Lid tolerance does not apply the requested adjustment on both plug sides.');
+}
+lidFitModels.forEach(disposeHolderModel);
+console.log('adjustable lid tolerance verified');
 
 const chamferModel = buildHolderModel({
   depth: depthForStickerCapacity(25),

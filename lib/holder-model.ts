@@ -11,6 +11,14 @@ export type StickerCapacity = (typeof STICKER_CAPACITIES)[number];
 export const LID_HEIGHT = 6;
 export const LID_FLANGE_HEIGHT = 1.6;
 export const LID_PLUG_HEIGHT = LID_HEIGHT - LID_FLANGE_HEIGHT;
+/**
+ * Fit adjustment applied to each side of the lid plug. Zero retains the
+ * original dimensions; negative values tighten the fit and positive values
+ * make the lid easier to remove.
+ */
+export const DEFAULT_LID_TOLERANCE = 0;
+export const MIN_LID_TOLERANCE = -0.5;
+export const MAX_LID_TOLERANCE = 0.5;
 /** A small 45° relief at the faces printed against the build plate. */
 export const BUILD_PLATE_CHAMFER = 0.6;
 /** A thumb-width opening through the top band of one wall. */
@@ -31,6 +39,8 @@ export type HolderConfig = {
   texture: boolean;
   /** Defaults to on so newly generated holders include an easy-open recess. */
   fingerNotch?: boolean;
+  /** Fit adjustment in millimetres on each side of the lid plug. */
+  lidTolerance?: number;
   part: HolderPart;
   logoSvg?: string | null;
   logoScale?: number;
@@ -244,6 +254,11 @@ function cavityWidthAt(y: number, depth: number) {
     : INSIDE_WIDTH;
 
   return Math.max(baseWidth, grooveWidthAtY, openingWidthAtY);
+}
+
+function lidPlugWidth(tolerance = DEFAULT_LID_TOLERANCE) {
+  const adjustment = THREE.MathUtils.clamp(tolerance, MIN_LID_TOLERANCE, MAX_LID_TOLERANCE);
+  return INSIDE_WIDTH - 2 * WALL * (0.12 / 1.5) - 2 * adjustment;
 }
 
 function fingerNotchStart(depth: number) {
@@ -874,7 +889,7 @@ function makeLid(config: HolderConfig, preview: boolean) {
   const plugHeight = LID_PLUG_HEIGHT + EPSILON;
   const tipChamfer = LID_TIP_CHAMFER;
   const straightHeight = plugHeight - tipChamfer;
-  const plugWidth = INSIDE_WIDTH - 2 * WALL * (0.12 / 1.5);
+  const plugWidth = lidPlugWidth(config.lidTolerance);
   const bead = WALL * (0.3 / 1.5);
   const beadCenter = 0.55 * straightHeight;
   const beadHalf = plugHeight * (1.4 / 6) / 2;
