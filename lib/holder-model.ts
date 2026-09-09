@@ -844,7 +844,10 @@ function makeLidLogo(config: HolderConfig) {
     0,
     THREE.MathUtils.clamp(config.logoZ ?? 0, -LOGO_POSITION_LIMIT, LOGO_POSITION_LIMIT),
   );
-  group.scale.setScalar(config.logoScale ?? 1);
+  // Keep the modifier's extrusion at a print-safe 0.2 mm while allowing the
+  // artwork footprint to be resized across the lid.
+  const logoScale = config.logoScale ?? 1;
+  group.scale.set(logoScale, 1, logoScale);
   group.rotation.y = config.logoRotation ?? 0;
 
   const logo = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
