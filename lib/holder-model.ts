@@ -17,10 +17,11 @@ export const BUILD_PLATE_CHAMFER = 0.6;
 export const FINGER_NOTCH_HEIGHT = LID_FLANGE_HEIGHT;
 export const LOGO_LAYER_HEIGHT = 0.2;
 const LID_TIP_CHAMFER = LID_PLUG_HEIGHT * 0.1;
-const FINGER_NOTCH_SIDES = [1, 4] as const;
+// These are the east and west faces: 3 and 9 o'clock when viewed from above.
+const FINGER_NOTCH_SIDES = [0, 3] as const;
 const FINGER_NOTCHES = [
-  { start: 1, end: 2, previousCorner: 0, nextCorner: 3 },
-  { start: 6, end: 7, previousCorner: 5, nextCorner: 8 },
+  { start: 3, end: 4, previousCorner: 2, nextCorner: 5 },
+  { start: 8, end: 9, previousCorner: 7, nextCorner: 0 },
 ] as const;
 
 export type HolderConfig = {
@@ -107,21 +108,20 @@ function hexLoop(flatToFlat: number, y: number, splitFingerEdge = false, fingerN
 
   if (!splitFingerEdge) return corners;
 
-  // Split opposite edges at the sides of the half-hex finger openings.
-  const edgeStart = corners[0];
-  const edgeEnd = corners[1];
-  const pointOnEdge = (amount: number) => edgeStart.clone().lerp(edgeEnd, amount);
+  // Split the east and west edges at the sides of the half-hex finger
+  // openings. Those faces are at 3 and 9 o'clock in a top-down view.
+  const pointOnEdge = (start: number, end: number, amount: number) => corners[start].clone().lerp(corners[end], amount);
   return [
     corners[0],
-    pointOnEdge(fingerNotchFraction),
-    pointOnEdge(1 - fingerNotchFraction),
     corners[1],
     corners[2],
+    pointOnEdge(2, 3, fingerNotchFraction),
+    pointOnEdge(2, 3, 1 - fingerNotchFraction),
     corners[3],
-    corners[3].clone().lerp(corners[4], fingerNotchFraction),
-    corners[3].clone().lerp(corners[4], 1 - fingerNotchFraction),
     corners[4],
     corners[5],
+    pointOnEdge(5, 0, fingerNotchFraction),
+    pointOnEdge(5, 0, 1 - fingerNotchFraction),
   ];
 }
 
@@ -166,7 +166,7 @@ function connectLoops(
 
 function hexSideForLoopSegment(index: number) {
   // Each finger opening splits one hex edge into three segments.
-  return [0, 0, 0, 1, 2, 3, 3, 3, 4, 5][index];
+  return [0, 1, 2, 2, 2, 3, 4, 5, 5, 5][index];
 }
 
 function pushHexCap(positions: number[], loop: Point[], y: number, up: boolean) {
@@ -336,11 +336,11 @@ function createBodyCoreGeometry(depth: number, engraved: boolean, fingerNotch: b
         pushQuad(positions, outerLower[notch.end], outerUpper[notch.end], innerLoops[index + 1][notch.end], innerLoops[index][notch.end], tangent.clone().negate());
       }
     }
-    pushRimSection(positions, outerTop.slice(2, 7), innerTop.slice(2, 7).reverse());
+    pushRimSection(positions, outerTop.slice(4, 9), innerTop.slice(4, 9).reverse());
     pushRimSection(
       positions,
-      [outerTop[7], outerTop[8], outerTop[9], outerTop[0], outerTop[1]],
-      [innerTop[1], innerTop[0], innerTop[9], innerTop[8], innerTop[7]],
+      [outerTop[9], outerTop[0], outerTop[1], outerTop[2], outerTop[3]],
+      [innerTop[3], innerTop[2], innerTop[1], innerTop[0], innerTop[9]],
     );
   } else {
     pushAnnularTopCap(positions, outerTop, innerTop);
