@@ -248,7 +248,8 @@ if (!transformedLid) throw new Error('Logo transform test is missing the lid.');
 const logoTransform = new Group();
 logoTransform.name = 'lid-svg-logo';
 logoTransform.position.set(4.5, 0, -3.25);
-logoTransform.scale.setScalar(1.7);
+// Artwork scale changes only its footprint; its 0.2 mm modifier depth is fixed.
+logoTransform.scale.set(1.7, 1, 1.7);
 logoTransform.rotation.y = 0.42;
 const sourceLogo = new Mesh(new BoxGeometry(2, LOGO_LAYER_HEIGHT, 1), new MeshBasicMaterial());
 sourceLogo.name = 'lid-svg-modifier';
@@ -269,8 +270,13 @@ for (let index = 0; index < 16; index += 1) {
     throw new Error('SVG modifier export does not preserve preview position, scale, and rotation.');
   }
 }
+const exportedLogoBounds = new Box3().setFromObject(exportedLogoModel);
+const exportedLogoSize = exportedLogoBounds.getSize(new Vector3());
+if (Math.abs(exportedLogoSize.z - LOGO_LAYER_HEIGHT) > 0.0001) {
+  throw new Error(`Exported SVG modifier is ${exportedLogoSize.z} mm thick instead of ${LOGO_LAYER_HEIGHT} mm.`);
+}
 disposeHolderModel(transformedLogoModel);
-console.log('SVG modifier export transform verified');
+console.log('SVG modifier export transform and thickness verified');
 
 if (typeof DOMParser === 'undefined') {
   console.log('SVG logo modifier test requires a browser DOM and is covered in preview QA');

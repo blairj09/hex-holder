@@ -423,7 +423,10 @@ export function LiveModelViewer(props: ViewerProps) {
           const startDistance = Math.max(0.5, dragVector.length());
           const nextScale = startScale * vector.length() / startDistance;
           // Deliberately unbounded: the artwork can extend beyond the lid.
-          if (Number.isFinite(nextScale) && nextScale > 0.01) draggedLogo.scale.setScalar(nextScale);
+          if (Number.isFinite(nextScale) && nextScale > 0.01) {
+            // Resizing artwork must not alter the 0.2 mm printed modifier depth.
+            draggedLogo.scale.set(nextScale, 1, nextScale);
+          }
         } else {
           draggedLogo.rotation.y = normalizeAngle(startRotation - (Math.atan2(vector.y, vector.x) - startAngle));
         }
