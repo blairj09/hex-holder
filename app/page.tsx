@@ -14,10 +14,13 @@ import {
   buildHolderModel,
   depthForStickerCapacity,
   disposeHolderModel,
+  DEFAULT_LID_TOLERANCE,
   hasFilledSvgShape,
   INSIDE_WIDTH,
   isComplexSvgForPrint,
   LID_PLUG_HEIGHT,
+  MAX_LID_TOLERANCE,
+  MIN_LID_TOLERANCE,
   makePrintableExportModel,
   makeLogoModifierExportModel,
   STICKER_CAPACITIES,
@@ -60,6 +63,7 @@ export default function Home() {
   const [embossed, setEmbossed] = useState(false);
   const [texture, setTexture] = useState(true);
   const [fingerNotch, setFingerNotch] = useState(true);
+  const [lidTolerance, setLidTolerance] = useState(DEFAULT_LID_TOLERANCE);
   const [part, setPart] = useState<HolderPart>('both');
   const [logoSvg, setLogoSvg] = useState<string | null>(null);
   const [logoScale, setLogoScale] = useState(1);
@@ -76,14 +80,14 @@ export default function Home() {
   const [resetToken, setResetToken] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState('');
-  const configRef = useRef<AppConfig>({ stickerCapacity, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled });
+  const configRef = useRef<AppConfig>({ stickerCapacity, cellWidth, embossed, texture, fingerNotch, lidTolerance, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled });
 
   const depth = depthForStickerCapacity(stickerCapacity);
-  const config: HolderConfig = { depth, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly };
+  const config: HolderConfig = { depth, cellWidth, embossed, texture, fingerNotch, lidTolerance, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly };
 
   useEffect(() => {
-    configRef.current = { stickerCapacity, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled };
-  }, [stickerCapacity, cellWidth, embossed, texture, fingerNotch, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled]);
+    configRef.current = { stickerCapacity, cellWidth, embossed, texture, fingerNotch, lidTolerance, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled };
+  }, [stickerCapacity, cellWidth, embossed, texture, fingerNotch, lidTolerance, part, logoSvg, logoScale, logoX, logoZ, logoRotation, logoForegroundOnly, assembled]);
 
   async function loadCatalog(force = false) {
     if (!force && (catalogState === 'ready' || catalogState === 'loading')) return;
@@ -126,7 +130,7 @@ export default function Home() {
     void Promise.resolve(context.registerTool({
       name: 'configure_sticker_holder',
       title: 'Configure hex sticker holder',
-      description: 'Set the sticker capacity, honeycomb finish, output parts, and visible arrangement. The inside width is fixed at 46 mm.',
+      description: 'Set the sticker capacity, honeycomb finish, lid fit adjustment, output parts, and visible arrangement. The inside width is fixed at 46 mm.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -135,6 +139,7 @@ export default function Home() {
           embossed: { type: 'boolean', description: 'Raise the honeycomb cells instead of engraving them.' },
           texture: { type: 'boolean', description: 'Show and export the honeycomb texture.' },
           fingerNotch: { type: 'boolean', description: 'Add a thumb-width recess under one lid edge.' },
+          lidTolerance: { type: 'number', minimum: MIN_LID_TOLERANCE, maximum: MAX_LID_TOLERANCE, description: 'Lid fit adjustment in millimetres on each side of the plug. Negative values tighten the fit; positive values loosen it.' },
           part: { type: 'string', enum: ['body', 'lid', 'both'] },
           assembled: { type: 'boolean', description: 'Show the lid seated on the holder. This does not affect the print layout.' },
         },
@@ -144,8 +149,10 @@ export default function Home() {
       execute(input) {
         if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Configuration must be an object.');
         const next = { ...configRef.current, ...(input as Partial<AppConfig>) };
+        next.lidTolerance ??= DEFAULT_LID_TOLERANCE;
         if (!isStickerCapacity(next.stickerCapacity)) throw new Error('stickerCapacity must be 25, 50, 75, or 100.');
         if (!isNumber(next.cellWidth) || next.cellWidth < 1.8 || next.cellWidth > 8) throw new Error('cellWidth must be between 1.8 and 8 mm.');
+        if (!isNumber(next.lidTolerance) || next.lidTolerance < MIN_LID_TOLERANCE || next.lidTolerance > MAX_LID_TOLERANCE) throw new Error(`lidTolerance must be between ${MIN_LID_TOLERANCE} and ${MAX_LID_TOLERANCE} mm.`);
         if (typeof next.texture !== 'boolean' || typeof next.embossed !== 'boolean' || typeof next.fingerNotch !== 'boolean' || typeof next.assembled !== 'boolean' || !isPart(next.part)) {
           throw new Error('The supplied finish or output selection is invalid.');
         }
@@ -153,6 +160,7 @@ export default function Home() {
         if (next.part !== 'both') next.assembled = false;
         setStickerCapacity(next.stickerCapacity);
         setCellWidth(next.cellWidth);
+        setLidTolerance(next.lidTolerance);
         setEmbossed(next.embossed);
         setTexture(next.texture);
         setFingerNotch(next.fingerNotch);
@@ -378,6 +386,16 @@ export default function Home() {
 
             <fieldset className="space-y-4 border-t border-[#e2e9eb] pt-4">
               <legend className="text-xs font-semibold uppercase tracking-[0.12em] text-[#648087]">Lid fit</legend>
+              <DimensionControl
+                label="Fit tolerance"
+                value={lidTolerance}
+                min={MIN_LID_TOLERANCE}
+                max={MAX_LID_TOLERANCE}
+                step={0.1}
+                displayPrecision={1}
+                rangeLabels={['Tight', 'Loose']}
+                onChange={(value) => { setLidTolerance(value); setStatus(''); }}
+              />
               <ToggleRow
                 id="finger-notch"
                 label="Lid notch"
@@ -438,7 +456,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="flex min-h-[540px] flex-col overflow-hidden rounded-2xl bg-[#063d4a] shadow-[0_10px_30px_rgba(6,61,74,0.14)] md:sticky md:top-4 md:h-[calc(100vh-6.5rem)] md:max-h-[740px]">
+        <section className="flex min-h-[540px] flex-col overflow-hidden rounded-2xl bg-[#063d4a] shadow-[0_10px_30px_rgba(6,61,74,0.14)] md:sticky md:top-4">
           <div className="flex items-center justify-between gap-3 border-b border-white/12 px-5 py-3.5">
             <h2 className="text-sm font-semibold text-white">Preview</h2>
             <div className="flex items-center gap-2">
@@ -507,19 +525,20 @@ export default function Home() {
   );
 }
 
-function DimensionControl({ label, detail, value, min, max, step, unit = 'mm', onChange, disabled = false }: { label: string; detail?: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (value: number) => void; disabled?: boolean }) {
+function DimensionControl({ label, detail, value, min, max, step, unit = 'mm', displayPrecision, rangeLabels, onChange, disabled = false }: { label: string; detail?: string; value: number; min: number; max: number; step: number; unit?: string; displayPrecision?: number; rangeLabels?: [string, string]; onChange: (value: number) => void; disabled?: boolean }) {
   const id = label.toLowerCase().replaceAll(' ', '-');
 
   return (
     <div className={disabled ? 'opacity-45' : ''}>
       <div className="mb-3 flex items-end justify-between gap-3">
-        <div><Label htmlFor={id} className="text-sm font-semibold">{label}</Label>{detail && <p className="mt-0.5 text-xs text-[#52717a]">{detail}</p>}</div>
-        <div className="relative w-28">
-          <Input id={id} type="number" inputMode="decimal" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => { const next = event.currentTarget.valueAsNumber; if (Number.isFinite(next)) onChange(clamp(next, min, max)); }} onBlur={(event) => { event.currentTarget.value = String(value); }} className="h-9 border-[#b9ced3] bg-white pr-9 text-right font-mono text-sm" />
+        <div className="min-w-0"><Label htmlFor={id} className="text-sm font-semibold">{label}</Label>{detail && <p className="mt-0.5 text-xs text-[#52717a]">{detail}</p>}</div>
+        <div className="relative w-28 shrink-0">
+          <Input id={id} type="number" inputMode="decimal" value={displayPrecision === undefined ? value : value.toFixed(displayPrecision)} min={min} max={max} step={step} disabled={disabled} onChange={(event) => { const next = event.currentTarget.valueAsNumber; if (Number.isFinite(next)) onChange(clamp(next, min, max)); }} onBlur={(event) => { event.currentTarget.value = displayPrecision === undefined ? String(value) : value.toFixed(displayPrecision); }} className="h-9 border-[#b9ced3] bg-white pr-9 text-right font-mono text-sm" />
           <span className="pointer-events-none absolute right-3 top-2.5 text-xs text-[#52717a]">{unit}</span>
         </div>
       </div>
       <Slider value={[value]} min={min} max={max} step={step} disabled={disabled} onValueChange={(values) => { const next = typeof values === 'number' ? values : values[0]; if (Number.isFinite(next)) onChange(next); }} className="[&_[data-slot=slider-range]]:bg-[#0c697a] [&_[data-slot=slider-thumb]]:border-[#0c697a]" />
+      {rangeLabels && <div className="mt-1 flex justify-between text-xs font-medium text-[#648087]"><span>{rangeLabels[0]}</span><span>{rangeLabels[1]}</span></div>}
     </div>
   );
 }

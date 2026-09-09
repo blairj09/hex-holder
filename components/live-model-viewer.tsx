@@ -517,6 +517,7 @@ export function LiveModelViewer(props: ViewerProps) {
       embossed: props.embossed,
       texture: props.texture,
       fingerNotch: props.fingerNotch,
+      lidTolerance: props.lidTolerance,
       part: props.part,
       logoSvg: props.logoSvg,
       logoScale: props.logoScale,
@@ -625,6 +626,30 @@ export function LiveModelViewer(props: ViewerProps) {
     } else if (previousLayoutRef.current !== layoutKey) {
       const resetRequested = previousResetTokenRef.current !== props.resetToken;
       fitCamera(container, model, camera, controls, hasFramedRef.current && !resetRequested);
+      const cameraEnd = camera.position.clone();
+      const controlsTargetEnd = controls.target.clone();
+      if (resetRequested && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        // fitCamera establishes the default starting view. Restore the user's
+        // current view, then ease to that position instead of snapping there.
+        camera.position.copy(cameraStart);
+        controls.target.copy(controlsTargetStart);
+        controls.update();
+        const startedAt = performance.now();
+        const duration = 420;
+        controls.enabled = false;
+        const animateReset = (now: number) => {
+          const progress = segmentProgress((now - startedAt) / duration, 0, 1);
+          camera.position.lerpVectors(cameraStart, cameraEnd, progress);
+          controls.target.lerpVectors(controlsTargetStart, controlsTargetEnd, progress);
+          controls.update();
+          if (progress < 1) {
+            animationFrame = requestAnimationFrame(animateReset);
+          } else {
+            controls.enabled = true;
+          }
+        };
+        animationFrame = requestAnimationFrame(animateReset);
+      }
       hasFramedRef.current = true;
       previousLayoutRef.current = layoutKey;
       previousResetTokenRef.current = props.resetToken;
@@ -637,7 +662,7 @@ export function LiveModelViewer(props: ViewerProps) {
       cancelAnimationFrame(animationFrame);
       controls.enabled = true;
     };
-  }, [props.depth, props.cellWidth, props.embossed, props.texture, props.fingerNotch, props.part, props.logoSvg, props.logoScale, props.logoX, props.logoZ, props.logoRotation, props.logoForegroundOnly, props.assembled, props.resetToken]);
+  }, [props.depth, props.cellWidth, props.embossed, props.texture, props.fingerNotch, props.lidTolerance, props.part, props.logoSvg, props.logoScale, props.logoX, props.logoZ, props.logoRotation, props.logoForegroundOnly, props.assembled, props.resetToken]);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
