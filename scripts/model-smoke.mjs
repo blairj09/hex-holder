@@ -188,13 +188,24 @@ const notchHeight = new Box3().setFromObject(fingerNotchCore).max.y;
 const notchFloor = notchHeight - FINGER_NOTCH_HEIGHT;
 const notchPositions = fingerNotchCore.geometry.getAttribute('position');
 let notchFloorTriangles = 0;
+const notchFloorCenters = [];
 for (let index = 0; index < notchPositions.count; index += 3) {
   const yValues = [notchPositions.getY(index), notchPositions.getY(index + 1), notchPositions.getY(index + 2)];
   if (yValues.every((y) => Math.abs(y - notchFloor) < 0.0001)) {
     notchFloorTriangles += 1;
+    notchFloorCenters.push(new Vector3(
+      (notchPositions.getX(index) + notchPositions.getX(index + 1) + notchPositions.getX(index + 2)) / 3,
+      notchFloor,
+      (notchPositions.getZ(index) + notchPositions.getZ(index + 1) + notchPositions.getZ(index + 2)) / 3,
+    ));
   }
 }
 if (notchFloorTriangles !== 4) throw new Error('Finger openings do not stop at closed flange-height floors.');
+if (!notchFloorCenters.every((center) => Math.abs(center.x) > Math.abs(center.z))
+  || !notchFloorCenters.some((center) => center.x > 0)
+  || !notchFloorCenters.some((center) => center.x < 0)) {
+  throw new Error('Finger openings are not positioned at 3 and 9 o\'clock.');
+}
 disposeHolderModel(fingerNotchModel);
 
 const plainBodyModel = buildHolderModel({

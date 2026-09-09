@@ -1,6 +1,6 @@
 # Hex Sticker Holder
 
-Hex Sticker Holder creates printable STL files for hex sticker holders in your browser.
+Hex Sticker Holder creates printable STL files for hex sticker holders in your browser. It is deployed at [jamesblair.me/tools/sticker-holder](https://www.jamesblair.me/tools/sticker-holder/).
 
 ## Start
 
@@ -34,4 +34,4 @@ The STL download includes the holder and an aligned 0.2 mm lid modifier when art
 
 ## License
 
-This repository does not include a license. Get permission before you reuse its code or design files.
+This project is licensed under the [MIT License](LICENSE).
