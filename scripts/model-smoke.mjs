@@ -7,6 +7,9 @@ import {
   depthForStickerCapacity,
   disposeHolderModel,
   FINGER_NOTCH_HEIGHT,
+  holderMetrics,
+  INTERNAL_BASE_FILLET_RADIUS,
+  INSIDE_WIDTH,
   LID_HEIGHT,
   LID_PLUG_HEIGHT,
   MAX_LID_TOLERANCE,
@@ -80,6 +83,14 @@ function flatToFlatAtY(mesh, y) {
     throw new Error(`${mesh.name} has no perimeter at y=${y}.`);
   }
   return maximum - minimum;
+}
+
+function hasVertexAt(mesh, x, y) {
+  const position = mesh.geometry.getAttribute('position');
+  for (let index = 0; index < position.count; index += 1) {
+    if (Math.abs(position.getX(index) - x) < 0.0001 && Math.abs(position.getY(index) - y) < 0.0001) return true;
+  }
+  return false;
 }
 
 for (const testCase of cases) {
@@ -195,6 +206,29 @@ for (const mesh of [chamferedBody, chamferedLid]) {
   }
 }
 disposeHolderModel(chamferModel);
+
+const internalFilletModel = buildHolderModel({
+  depth: depthForStickerCapacity(50),
+  cellWidth: 3.9,
+  embossed: false,
+  texture: false,
+  fingerNotch: false,
+  part: 'body',
+}, { arrangement: 'print', preview: false });
+const internalFilletCore = internalFilletModel.getObjectByName('body-core');
+if (!(internalFilletCore instanceof Mesh)) throw new Error('Internal base fillet body core is missing.');
+const internalFloor = holderMetrics(depthForStickerCapacity(50)).floor;
+const innerHalfWidth = INSIDE_WIDTH / 2;
+const filletMidpointY = internalFloor + INTERNAL_BASE_FILLET_RADIUS / 2;
+const filletMidpointX = innerHalfWidth - INTERNAL_BASE_FILLET_RADIUS
+  + Math.sqrt(INTERNAL_BASE_FILLET_RADIUS ** 2 - (INTERNAL_BASE_FILLET_RADIUS / 2) ** 2);
+if (!hasVertexAt(internalFilletCore, innerHalfWidth - INTERNAL_BASE_FILLET_RADIUS, internalFloor)
+  || !hasVertexAt(internalFilletCore, filletMidpointX, filletMidpointY)
+  || !hasVertexAt(internalFilletCore, innerHalfWidth, internalFloor + INTERNAL_BASE_FILLET_RADIUS)) {
+  throw new Error('Internal base fillet does not use the specified 0.6 mm radius.');
+}
+disposeHolderModel(internalFilletModel);
+console.log('0.6 mm internal base fillet verified');
 
 const fingerNotchModel = buildHolderModel({
   depth: depthForStickerCapacity(50),

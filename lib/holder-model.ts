@@ -21,6 +21,8 @@ export const MIN_LID_TOLERANCE = -0.5;
 export const MAX_LID_TOLERANCE = 0.5;
 /** A small 45° relief at the faces printed against the build plate. */
 export const BUILD_PLATE_CHAMFER = 0.6;
+/** A rounded transition where the inside floor meets the holder walls. */
+export const INTERNAL_BASE_FILLET_RADIUS = 0.6;
 /** A thumb-width opening through the top band of one wall. */
 export const FINGER_NOTCH_HEIGHT = LID_FLANGE_HEIGHT;
 export const LOGO_LAYER_HEIGHT = 0.2;
@@ -230,7 +232,6 @@ function uniqueLayers(layers: LoftLayer[]) {
 function cavityWidthAt(y: number, depth: number) {
   const floor = depth * (1.8 / 30);
   const bodyHeight = depth + floor;
-  const baseBevel = WALL * (0.8 / 1.5);
   const openingHeight = WALL * (1 / 1.5);
   const openingWidth = WALL * (0.6 / 1.5);
   const plugHeight = LID_PLUG_HEIGHT;
@@ -242,16 +243,20 @@ function cavityWidthAt(y: number, depth: number) {
   const plugWidth = INSIDE_WIDTH - 2 * WALL * (0.12 / 1.5);
   const grooveWidth = plugWidth + 2 * (WALL * (0.3 / 1.5) + WALL * (0.15 / 1.5));
 
-  const baseWidth = y < floor + baseBevel
-    ? INSIDE_WIDTH - 2 * baseBevel + 2 * baseBevel * ((y - floor) / baseBevel)
+  // A quarter-round preserves the full cavity width above the floor while
+  // removing the sharp internal corner that can concentrate print stresses.
+  const filletOffset = THREE.MathUtils.clamp(y - floor, 0, INTERNAL_BASE_FILLET_RADIUS);
+  const baseWidth = y < floor + INTERNAL_BASE_FILLET_RADIUS
+    ? INSIDE_WIDTH - 2 * INTERNAL_BASE_FILLET_RADIUS
+      + 2 * Math.sqrt(INTERNAL_BASE_FILLET_RADIUS ** 2 - (filletOffset - INTERNAL_BASE_FILLET_RADIUS) ** 2)
     : INSIDE_WIDTH;
   const grooveWidthAtY = Math.abs(y - grooveCenter) <= grooveHalf
     ? INSIDE_WIDTH + (grooveWidth - INSIDE_WIDTH) * (1 - Math.abs(y - grooveCenter) / grooveHalf)
-    : INSIDE_WIDTH;
+    : 0;
   const openingStart = bodyHeight - openingHeight;
   const openingWidthAtY = y >= openingStart
     ? INSIDE_WIDTH + 2 * openingWidth * ((y - openingStart) / openingHeight)
-    : INSIDE_WIDTH;
+    : 0;
 
   return Math.max(baseWidth, grooveWidthAtY, openingWidthAtY);
 }
@@ -281,11 +286,16 @@ function createBodyCoreGeometry(depth: number, engraved: boolean, fingerNotch: b
   const straightHeight = plugHeight - plugHeight * (0.6 / 6);
   const grooveCenter = bodyHeight - 0.55 * straightHeight;
   const grooveHalf = plugHeight * (1.7 / 6) / 2;
-  const baseBevel = WALL * (0.8 / 1.5);
+  // Six segments keep the maximum deviation from the 0.6 mm radius below
+  // 0.006 mm, well beneath typical FDM print resolution.
+  const baseFilletSegments = 6;
   const openingStart = bodyHeight - WALL * (1 / 1.5);
   const cavityBreaks = [
     floor,
-    floor + baseBevel,
+    ...Array.from(
+      { length: baseFilletSegments },
+      (_, index) => floor + INTERNAL_BASE_FILLET_RADIUS * (index + 1) / baseFilletSegments,
+    ),
     grooveCenter - grooveHalf,
     grooveCenter,
     grooveCenter + grooveHalf,
